@@ -122,7 +122,7 @@ async function requireRegisteredUser(
       sock,
       jid,
       {
-        text: `🤖 *BlenderRevive Bot Policy*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *Registration Required*\n\nAs per the bot policy, you must register yourself first before accessing user data.\n\n👉 Please register using the command:\n\`${prefix}reg-ref <companyName>\`\n\n📝 *Important Notes:*\n- If you register under a false company, the developer or administrators might ban you.\n- If you are a student or unemployed, please register yourself as *Student* or *Unemployed* (e.g. \`${prefix}reg-ref Student\` or \`${prefix}reg-ref Unemployed\`).\n\nThank you for your cooperation! 🙏`
+        text: `🚫 *Hold up — you're not registered yet.*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nYou can't access the referral network without registering first. No freeloaders. 😤\n\n*Why register?* Once you do, you unlock:\n🔍 Search employees at *any* company\n🏢 Browse the full company directory\n👤 Find people to DM for referrals\n\n👉 Register now:\n\`${prefix}reg_ref <Your Company>\`\n\n_Student or unemployed? That's cool:_\n\`${prefix}reg_ref Student\` or \`${prefix}reg_ref Unemployed\`\n\n⚠️ _Fake company = ban. Keep it real._ 🙏`
       },
       { quoted: msg }
     );

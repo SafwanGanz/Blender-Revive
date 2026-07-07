@@ -48,12 +48,26 @@ const LOCAL_FALLBACKS: Record<string, { canonicalName: string; displayName: stri
     rank: 'A',
     justification: 'Global technology giant.'
   },
+  'MS': {
+    canonicalName: 'Microsoft',
+    displayName: 'Microsoft',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global technology giant.'
+  },
   'AMAZON': {
     canonicalName: 'Amazon',
     displayName: 'Amazon',
     status: 'registered',
     rank: 'A',
     justification: 'Global e-commerce and cloud giant.'
+  },
+  'AWS': {
+    canonicalName: 'Amazon_Web_Services',
+    displayName: 'Amazon Web Services',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Cloud computing subsidiary of Amazon.'
   },
   'META': {
     canonicalName: 'Meta',
@@ -62,12 +76,152 @@ const LOCAL_FALLBACKS: Record<string, { canonicalName: string; displayName: stri
     rank: 'A',
     justification: 'Global social media and technology giant.'
   },
+  'FACEBOOK': {
+    canonicalName: 'Meta',
+    displayName: 'Meta',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global social media and technology giant (formerly Facebook).'
+  },
   'INFOSYS': {
     canonicalName: 'Infosys',
     displayName: 'Infosys',
     status: 'registered',
     rank: 'A',
     justification: 'National enterprise, major Indian IT services provider.'
+  },
+  'HP': {
+    canonicalName: 'Hewlett_Packard',
+    displayName: 'Hewlett Packard',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global technology company, Fortune 500.'
+  },
+  'HPE': {
+    canonicalName: 'Hewlett_Packard_Enterprise',
+    displayName: 'Hewlett Packard Enterprise',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Enterprise IT company, spun off from HP.'
+  },
+  'HEWLETT_PACKARD': {
+    canonicalName: 'Hewlett_Packard',
+    displayName: 'Hewlett Packard',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global technology company, Fortune 500.'
+  },
+  'HEWLETT_PACKARD_ENTERPRISE': {
+    canonicalName: 'Hewlett_Packard_Enterprise',
+    displayName: 'Hewlett Packard Enterprise',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Enterprise IT company, spun off from HP.'
+  },
+  'GOLDMAN_SACHS': {
+    canonicalName: 'Goldman_Sachs',
+    displayName: 'Goldman Sachs',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global investment banking giant.'
+  },
+  'GS': {
+    canonicalName: 'Goldman_Sachs',
+    displayName: 'Goldman Sachs',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global investment banking giant.'
+  },
+  'JPMORGAN_CHASE': {
+    canonicalName: 'JPMorgan_Chase',
+    displayName: 'JPMorgan Chase',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global banking and financial services giant.'
+  },
+  'JPM': {
+    canonicalName: 'JPMorgan_Chase',
+    displayName: 'JPMorgan Chase',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global banking and financial services giant.'
+  },
+  'ACCENTURE': {
+    canonicalName: 'Accenture',
+    displayName: 'Accenture',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Global consulting and professional services.'
+  },
+  'WIPRO': {
+    canonicalName: 'Wipro',
+    displayName: 'Wipro',
+    status: 'registered',
+    rank: 'A',
+    justification: 'National enterprise, major Indian IT services provider.'
+  },
+  'HCL': {
+    canonicalName: 'HCL_Technologies',
+    displayName: 'HCL Technologies',
+    status: 'registered',
+    rank: 'A',
+    justification: 'National enterprise, major Indian IT services provider.'
+  },
+  'HCL_TECHNOLOGIES': {
+    canonicalName: 'HCL_Technologies',
+    displayName: 'HCL Technologies',
+    status: 'registered',
+    rank: 'A',
+    justification: 'National enterprise, major Indian IT services provider.'
+  },
+  'COGNIZANT': {
+    canonicalName: 'Cognizant',
+    displayName: 'Cognizant',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Major IT services and consulting company.'
+  },
+  'CTS': {
+    canonicalName: 'Cognizant',
+    displayName: 'Cognizant',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Major IT services and consulting company.'
+  },
+  'DELOITTE': {
+    canonicalName: 'Deloitte',
+    displayName: 'Deloitte',
+    status: 'registered',
+    rank: 'A',
+    justification: 'Big Four consulting and professional services.'
+  },
+  'FLIPKART': {
+    canonicalName: 'Flipkart',
+    displayName: 'Flipkart',
+    status: 'registered',
+    rank: 'B',
+    justification: 'Major Indian e-commerce company, Walmart subsidiary.'
+  },
+  'RAZORPAY': {
+    canonicalName: 'Razorpay',
+    displayName: 'Razorpay',
+    status: 'registered',
+    rank: 'B',
+    justification: 'Well-funded Indian fintech startup.'
+  },
+  'ZOMATO': {
+    canonicalName: 'Zomato',
+    displayName: 'Zomato',
+    status: 'registered',
+    rank: 'B',
+    justification: 'Publicly listed Indian food-tech company.'
+  },
+  'SWIGGY': {
+    canonicalName: 'Swiggy',
+    displayName: 'Swiggy',
+    status: 'registered',
+    rank: 'B',
+    justification: 'Major Indian food delivery startup.'
   },
   'STUDENT': {
     canonicalName: 'Student',

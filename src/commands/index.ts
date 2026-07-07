@@ -286,12 +286,12 @@ export async function handleIncomingMessage(sock: any, msg: proto.IWebMessageInf
   // Check if message starts with the designated command prefix
   if (!text.startsWith(prefix)) {
     if (isDm) {
-      // In DM, if the message is not a command, prompt them to use help or contact the developer
+      // In DM, if the message is not a command, introduce the bot and its purpose
       await sendHumanLikeResponse(
         sock,
         jid,
         {
-          text: `🤖 *BlenderRevive Bot*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nI didn't recognize that message as a command.\n\n💡 Please use \`${prefix}help\` to see a list of all available commands.\n\n👤 Or contact my developer, *Virat Pandey*:\n- GitHub: https://github.com/crysosancher\n- LinkedIn: https://linkedin.com/in/crysosancher`
+          text: `🔥 *BlenderRevive — Referral Bot*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nBruh, I'm not ChatGPT. 💀\n\nI'm a *referral bot* — I help job seekers find *real employees* at companies so you can DM them and get referred instead of cold-applying into the void.\n\n🎯 *Quick start:*\n1️⃣ \`${prefix}reg_ref <Your Company>\` — register yourself\n2️⃣ \`${prefix}company Google\` — find Google employees\n3️⃣ DM them with your resume + job link\n4️⃣ Get referred. Skip the ATS. Win. 🚀\n\n💡 Type \`${prefix}help\` for the full guide.\n\n👤 Built by *Virat Pandey* → github.com/crysosancher`
         },
         { quoted: msg }
       );
@@ -333,7 +333,7 @@ export async function handleIncomingMessage(sock: any, msg: proto.IWebMessageInf
           sock,
           jid,
           {
-            text: `⚠️ *Unknown command.*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n💡 Type \`${prefix}help\` to see all available commands.\n\n👤 Or contact my developer, *Virat Pandey*:\n- GitHub: https://github.com/crysosancher\n- LinkedIn: https://linkedin.com/in/crysosancher`
+            text: `❓ *That command doesn't exist, fam.*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nI'm a referral bot, not Google. 😅\n\n💡 Type \`${prefix}help\` to see what I can actually do — spoiler: help you get referrals at top companies.\n\n👤 Built by *Virat Pandey* → github.com/crysosancher`
           },
           { quoted: msg }
         );

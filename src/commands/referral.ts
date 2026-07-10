@@ -1425,3 +1425,80 @@ export const searchCommand: Command = {
   },
 };
 
+/**
+ * Command: /analytics (aliases: /stats, /summary)
+ * Manually triggers Gemini group chat analytics for the past 24 hours.
+ * Restricted to Group Admins or Developer.
+ */
+export const analyticsCommand: Command = {
+  name: 'analytics',
+  aliases: ['stats', 'summary'],
+  description: 'Generate Gemini analytics for the past 24 hours of group chat.',
+  async execute(sock, msg, args) {
+    const jid = msg.key.remoteJid!;
+    if (!jid.endsWith('@g.us')) {
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        { text: '⚠️ *This command can only be used inside a group chat.*' },
+        { quoted: msg }
+      );
+      return;
+    }
+
+    // Auth gate: Admin or Developer
+    const isAdmin = await isSenderGroupAdmin(sock, msg);
+    const isDev = await isSenderDev(sock, msg);
+    if (!isAdmin && !isDev) {
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        { text: '⚠️ *Restricted command.* Only group admins or developers can trigger group analytics.' },
+        { quoted: msg }
+      );
+      return;
+    }
+
+    // Check message count in last 24h
+    try {
+      const { getDb } = await import('../db/mongodb');
+      const db = getDb();
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const count = await db.collection('group_messages').countDocuments({
+        groupId: jid,
+        timestamp: { $gte: oneDayAgo }
+      });
+
+      if (count < 10) {
+        await sendHumanLikeResponse(
+          sock,
+          jid,
+          { text: `⚠️ *Not enough data to run analytics today.* Minimum 10 group messages are required in the past 24 hours (Current: ${count}).` },
+          { quoted: msg }
+        );
+        return;
+      }
+
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        { text: '⏳ *Analyzing group chat history with Gemini AI...* This might take a few seconds.' },
+        { quoted: msg }
+      );
+
+      const { runGroupAnalytics } = await import('../services/gemini-analytics');
+      await runGroupAnalytics(sock, jid);
+
+    } catch (err) {
+      console.error('[Command: analytics] Failed to run analytics:', err);
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        { text: `❌ *Error running group analytics:* ${(err as Error).message}` },
+        { quoted: msg }
+      );
+    }
+  }
+};
+
+

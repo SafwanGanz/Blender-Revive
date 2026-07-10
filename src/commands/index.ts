@@ -379,7 +379,8 @@ import {
   companyCommand,
   verifyCronCommand,
   tagCompanyCommand,
-  searchCommand
+  searchCommand,
+  analyticsCommand
 } from './referral';
 import { devCommand } from './dev';
 import { warnCommand, unwarnCommand, checkWarnCommand } from './warn';
@@ -396,6 +397,7 @@ registerCommand(companyCommand);
 registerCommand(verifyCronCommand);
 registerCommand(tagCompanyCommand);
 registerCommand(searchCommand);
+registerCommand(analyticsCommand);
 registerCommand(devCommand);
 registerCommand(warnCommand);
 registerCommand(unwarnCommand);

@@ -47,6 +47,22 @@ export function setupQueue(): Queue {
     console.error('[Queue] Failed to schedule company verification cron:', err);
   });
 
+  // Schedule repeatable group analytics cron job (runs daily at midnight)
+  messageQueue.add(
+    'group-analytics-cron',
+    {},
+    {
+      repeat: {
+        pattern: '0 0 * * *',
+      },
+      jobId: 'group-analytics-cron-job',
+    }
+  ).then(() => {
+    console.log('[Queue] Repeatable group analytics cron job successfully scheduled');
+  }).catch((err) => {
+    console.error('[Queue] Failed to schedule group analytics cron:', err);
+  });
+
   console.log('[Queue] Message queue successfully initialized');
   return messageQueue;
 }
@@ -108,6 +124,41 @@ export function setupWorker(getSocket: () => any, concurrency: number = 5): Work
           console.log(`[Worker] Cron task complete: checked ${checked} companies, updated ${updatedReferrals} referrals.`);
         } catch (err) {
           console.error('[Worker] Cron task failed:', err);
+          throw err;
+        }
+        return;
+      }
+
+      // Handle repeatable group analytics cron job
+      if (job.name === 'group-analytics-cron') {
+        console.log('[Worker] Starting cron task: Group Analytics & Reports...');
+        const sock = getSocket();
+        if (!sock || !isSocketConnected()) {
+          throw new Error('[Worker] Socket is not connected. Skipping group analytics cron run.');
+        }
+
+        try {
+          const { getDb } = await import('../db/mongodb');
+          const { runGroupAnalytics } = await import('../services/gemini-analytics');
+
+          const db = getDb();
+          const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+          // Find group IDs that have messages in the last 24 hours
+          const activeGroups = await db.collection('group_messages').aggregate([
+            { $match: { timestamp: { $gte: oneDayAgo } } },
+            { $group: { _id: '$groupId', count: { $sum: 1 } } },
+            { $match: { count: { $gte: 10 } } } // Minimum 10 messages required
+          ]).toArray();
+
+          console.log(`[Worker] Found ${activeGroups.length} groups with >= 10 messages in the last 24h.`);
+
+          for (const grp of activeGroups) {
+            await runGroupAnalytics(sock, grp._id);
+          }
+          console.log('[Worker] Cron task complete: Group Analytics.');
+        } catch (err) {
+          console.error('[Worker] Group analytics cron task failed:', err);
           throw err;
         }
         return;

@@ -335,6 +335,9 @@ export async function startWhatsAppBot(): Promise<any> {
     }
 
     if (connection === 'close') {
+      // Capture whether we were previously connected (for smart 401 handling)
+      const wasConnected = isConnected;
+
       // Mark as disconnected IMMEDIATELY to stop all in-flight async operations
       isConnected = false;
       sockInstance = null;
@@ -347,17 +350,25 @@ export async function startWhatsAppBot(): Promise<any> {
         || (lastDisconnect?.error as any)?.output?.payload?.message
         || 'unknown';
 
-      // Determine if we should attempt reconnection.
-      // Only permanently give up for explicit loggedOut (status 401 from Baileys maps to DisconnectReason.loggedOut)
-      // when we've exhausted all retry attempts.
+      // Smart reconnection logic:
+      // - 401 (loggedOut/device_removed) BEFORE ever connecting = dead credentials, don't retry
+      // - 401 AFTER being connected (mid-session) = transient, retry with backoff
+      // - Other codes (408 timeout, 503 unavailable, etc.) = always retry
       const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const isDeadCredentials = isLoggedOut && !wasConnected;
       const canRetry = reconnectAttempt < MAX_RECONNECT_ATTEMPTS;
-      const shouldReconnect = !isLoggedOut || canRetry;
+      const shouldReconnect = !isDeadCredentials && (!isLoggedOut || canRetry);
 
       console.log(
         `[Bot] Connection closed. Reason: ${reasonTag} (code: ${statusCode}). ` +
-        `Attempt: ${reconnectAttempt + 1}/${MAX_RECONNECT_ATTEMPTS}. Reconnecting: ${shouldReconnect}`
+        `Was connected: ${wasConnected}. Attempt: ${reconnectAttempt + 1}/${MAX_RECONNECT_ATTEMPTS}. Reconnecting: ${shouldReconnect}`
       );
+
+      if (isDeadCredentials) {
+        console.log('[Bot] ❌ Credentials are invalid (401 before connection was established).');
+        console.log('[Bot] Please delete credentials in MongoDB and re-scan QR code.');
+        return;
+      }
 
       if (shouldReconnect) {
         reconnectAttempt++;
@@ -369,7 +380,7 @@ export async function startWhatsAppBot(): Promise<any> {
         console.log(`[Bot] Re-establishing connection in ${delay / 1000}s (attempt ${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})...`);
         setTimeout(() => startWhatsAppBot(), delay);
       } else {
-        console.log('[Bot] ❌ Exhausted all reconnection attempts or permanently logged out.');
+        console.log('[Bot] ❌ Exhausted all reconnection attempts.');
         console.log('[Bot] Please delete credentials in MongoDB and re-scan QR code to reconnect.');
       }
     }
@@ -543,6 +554,28 @@ export async function startWhatsAppBot(): Promise<any> {
             fs.appendFileSync(logFilePath, `${serialized}\n---\n`);
           } catch (err) {
             console.error('[Bot] Failed to log DM message:', err);
+          }
+        }
+
+        // Log incoming group messages to MongoDB for Gemini analytics
+        if (jid && jid.endsWith('@g.us')) {
+          try {
+            const cleanSender = senderJid ? cleanJid(senderJid) : cleanJid(jid);
+            const { getMessageText } = await import('./commands');
+            const msgText = getMessageText(msg).trim();
+            if (msgText) {
+              const groupMessagesCol = getDb().collection('group_messages');
+              await groupMessagesCol.insertOne({
+                _id: msg.key.id as any,
+                groupId: jid,
+                senderJid: cleanSender,
+                senderName: msg.pushName || 'Unknown',
+                text: msgText,
+                timestamp: new Date((msg.messageTimestamp as number) * 1000 || Date.now())
+              });
+            }
+          } catch (err) {
+            console.error('[Bot] Failed to log group message to DB:', err);
           }
         }
 

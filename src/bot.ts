@@ -23,6 +23,45 @@ const logger = pino({ level: 'warn' });
 
 let sockInstance: any = null;
 
+// --- Connection state management ---
+// Tracks whether the socket is currently connected and alive.
+// All async/delayed operations MUST check this before using the socket.
+let isConnected = false;
+
+// Track all active setTimeout handles so we can cancel them on disconnect.
+// This prevents delayed callbacks (welcome messages, privacy tokens, etc.)
+// from firing on a dead socket and causing cascading errors.
+const activeTimeouts = new Set<ReturnType<typeof setTimeout>>();
+
+/**
+ * Creates a tracked setTimeout that auto-cleans up and can be cancelled on disconnect.
+ */
+function trackedTimeout(fn: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+  const handle = setTimeout(() => {
+    activeTimeouts.delete(handle);
+    fn();
+  }, delayMs);
+  activeTimeouts.add(handle);
+  return handle;
+}
+
+/**
+ * Cancels all pending tracked timeouts. Called on every disconnect.
+ */
+function cancelAllPendingTimeouts(): void {
+  for (const handle of activeTimeouts) {
+    clearTimeout(handle);
+  }
+  activeTimeouts.clear();
+  console.log('[Bot] Cancelled all pending background timeouts.');
+}
+
+// Exponential backoff state for reconnection
+let reconnectAttempt = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_DELAY_MS = 5000; // 5 seconds
+const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
+
 /**
  * Utility to normalize JIDs.
  */
@@ -38,6 +77,13 @@ function cleanJid(jid: string): string {
  */
 export function getSocket() {
   return sockInstance;
+}
+
+/**
+ * Returns whether the socket is currently connected.
+ */
+export function isSocketConnected(): boolean {
+  return isConnected;
 }
 
 /**
@@ -202,9 +248,12 @@ export async function startWhatsAppBot(): Promise<any> {
 
     if (connection === 'open') {
       console.log('[Bot] Connection successfully established with WhatsApp!');
+      isConnected = true;
+      reconnectAttempt = 0; // Reset backoff counter on successful connection
 
       // Check account reachout timelock status
-      setTimeout(async () => {
+      trackedTimeout(async () => {
+        if (!isConnected) return;
         try {
           const timelockStatus = await sock.fetchAccountReachoutTimelock();
           console.log(`[Bot] Reachout Timelock Status:`, JSON.stringify(timelockStatus));
@@ -215,12 +264,14 @@ export async function startWhatsAppBot(): Promise<any> {
             console.log('[Bot] ✅ Account is NOT under reach-out time-lock.');
           }
         } catch (err) {
+          if (!isConnected) return; // Swallow errors if we disconnected mid-flight
           console.error('[Bot] Failed to fetch reachout timelock status:', err);
         }
       }, 3000);
 
       // Proactively issue privacy tokens for known contacts
-      setTimeout(async () => {
+      trackedTimeout(async () => {
+        if (!isConnected) return;
         try {
           const lidMapCollection = getDb().collection('lid_phone_map');
           const allMappings = await lidMapCollection.find({}).toArray();
@@ -230,11 +281,16 @@ export async function startWhatsAppBot(): Promise<any> {
             console.log(`[Bot] Proactively issuing privacy tokens for ${lids.length} known contacts...`);
             // Issue in batches of 10 to avoid overwhelming the server
             for (let i = 0; i < lids.length; i += 10) {
+              if (!isConnected) {
+                console.log('[Bot] Connection lost during privacy token issuance, aborting.');
+                return;
+              }
               const batch = lids.slice(i, i + 10);
               try {
                 await sock.issuePrivacyTokens(batch);
                 console.log(`[Bot] Issued privacy tokens batch ${Math.floor(i/10) + 1}/${Math.ceil(lids.length/10)}`);
               } catch (batchErr: any) {
+                if (!isConnected) return;
                 console.warn(`[Bot] Privacy token batch ${Math.floor(i/10) + 1} failed:`, batchErr?.message || batchErr);
               }
               // Small delay between batches
@@ -243,6 +299,7 @@ export async function startWhatsAppBot(): Promise<any> {
             console.log(`[Bot] Privacy token issuance complete.`);
           }
         } catch (err) {
+          if (!isConnected) return;
           console.error('[Bot] Proactive token issuance failed (non-fatal):', err);
         }
       }, 8000);
@@ -250,13 +307,19 @@ export async function startWhatsAppBot(): Promise<any> {
       // Background: Scan all groups to harvest LID↔Phone participant mappings & usernames.
       // This runs once on each connection open, building the mapping table so
       // DM mentions can resolve LIDs to clickable phone JIDs.
-      setTimeout(async () => {
+      trackedTimeout(async () => {
+        if (!isConnected) return;
         try {
           console.log('[Bot] Starting background group scan for LID→Phone mappings and usernames...');
           const groups = await sock.groupFetchAllParticipating();
+          if (!isConnected) return;
           const groupIds = Object.keys(groups);
 
           for (const gid of groupIds) {
+            if (!isConnected) {
+              console.log('[Bot] Connection lost during group scan, aborting.');
+              return;
+            }
             const group = groups[gid];
             if (group.participants) {
               await captureGroupParticipantMappings(group.participants);
@@ -265,29 +328,57 @@ export async function startWhatsAppBot(): Promise<any> {
 
           console.log(`[Bot] Group scan complete: ${groupIds.length} groups scanned.`);
         } catch (err) {
+          if (!isConnected) return;
           console.error('[Bot] Background group scan failed (non-fatal):', err);
         }
       }, 5000); // Wait 5s after connection to avoid flooding
     }
 
     if (connection === 'close') {
+      // Mark as disconnected IMMEDIATELY to stop all in-flight async operations
+      isConnected = false;
+      sockInstance = null;
+
+      // Cancel all pending delayed operations (welcome messages, privacy tokens, group scans)
+      cancelAllPendingTimeouts();
+
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const reasonTag = (lastDisconnect?.error as any)?.data?.content?.[0]?.tag
+        || (lastDisconnect?.error as any)?.output?.payload?.message
+        || 'unknown';
+
+      // Determine if we should attempt reconnection.
+      // Only permanently give up for explicit loggedOut (status 401 from Baileys maps to DisconnectReason.loggedOut)
+      // when we've exhausted all retry attempts.
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const canRetry = reconnectAttempt < MAX_RECONNECT_ATTEMPTS;
+      const shouldReconnect = !isLoggedOut || canRetry;
 
       console.log(
-        `[Bot] Connection closed. Reason code: ${statusCode}. Reconnecting: ${shouldReconnect}`
+        `[Bot] Connection closed. Reason: ${reasonTag} (code: ${statusCode}). ` +
+        `Attempt: ${reconnectAttempt + 1}/${MAX_RECONNECT_ATTEMPTS}. Reconnecting: ${shouldReconnect}`
       );
 
       if (shouldReconnect) {
-        console.log('[Bot] Re-establishing connection in 5 seconds...');
-        setTimeout(() => startWhatsAppBot(), 5000);
+        reconnectAttempt++;
+        // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s...
+        const delay = Math.min(
+          BASE_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempt - 1),
+          MAX_RECONNECT_DELAY_MS
+        );
+        console.log(`[Bot] Re-establishing connection in ${delay / 1000}s (attempt ${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})...`);
+        setTimeout(() => startWhatsAppBot(), delay);
       } else {
-        console.log('[Bot] Logged out from WhatsApp. Please delete credentials in MongoDB if you wish to re-scan.');
+        console.log('[Bot] ❌ Exhausted all reconnection attempts or permanently logged out.');
+        console.log('[Bot] Please delete credentials in MongoDB and re-scan QR code to reconnect.');
       }
     }
   });
 
   // 2b. Welcome message and verification for new group participants
+  // NOTE: Welcome DMs are DISABLED to prevent cascading crashes when the socket
+  // disconnects during the 15-35s delay window. Only a lightweight group mention
+  // is sent, guarded by connection state checks.
   sock.ev.on('group-participants.update', async (update) => {
     const { id, participants, action } = update;
 
@@ -296,7 +387,13 @@ export async function startWhatsAppBot(): Promise<any> {
       console.log(`[Bot] Participants added to group ${id}:`, participants);
       
       // Delay the welcome message processing by 15 seconds to allow the user to fully join the chat
-      setTimeout(async () => {
+      trackedTimeout(async () => {
+        // GUARD: Abort if connection was lost during the delay
+        if (!isConnected) {
+          console.log('[Bot] Skipping welcome message — connection lost during delay.');
+          return;
+        }
+
         try {
           const db = getDb();
           const referralsCollection = db.collection('referrals');
@@ -310,19 +407,12 @@ export async function startWhatsAppBot(): Promise<any> {
           const cleanEnvBotNumber = envBotNumber.replace(/\D/g, ''); // Extract only digits
           const botJid = sock.user?.id ? cleanJid(sock.user.id) : '';
 
-          // Fetch group name dynamically (once for all participants)
-          let groupName = 'the group';
-          try {
-            const metadata = await sock.groupMetadata(id);
-            groupName = metadata.subject || 'the group';
-          } catch (err) {
-            console.error('[Bot] Failed to fetch group metadata for welcome message:', err);
-          }
-
           // Collect unregistered participants for a single group welcome
           const unregisteredMentions: { targetJid: string }[] = [];
 
           for (const participant of participants) {
+            if (!isConnected) return; // Bail mid-loop if disconnected
+
             const cleanedParticipant = cleanJid(participant.id);
 
             // Skip if the participant is the bot itself
@@ -330,11 +420,12 @@ export async function startWhatsAppBot(): Promise<any> {
                           (cleanEnvBotNumber && cleanedParticipant.split('@')[0] === cleanEnvBotNumber);
             if (isBot) continue;
 
-            // Resolve phone JID from LID if needed
+            // Resolve phone JID from LID if needed (DB-only, no socket query to be safe)
             let resolvedPhone: string | null = null;
             if (cleanedParticipant.endsWith('@lid')) {
               try {
-                resolvedPhone = await resolvePhoneFromLid(sock, cleanedParticipant);
+                const { getPhoneJidFromLid } = await import('./db/lid-phone-map');
+                resolvedPhone = await getPhoneJidFromLid(cleanedParticipant);
               } catch (err) {
                 console.error(`[Bot] Failed to resolve phone JID for participant: ${cleanedParticipant}`, err);
               }
@@ -354,44 +445,44 @@ export async function startWhatsAppBot(): Promise<any> {
                 const targetJid = resolvedPhone || cleanedParticipant;
                 unregisteredMentions.push({ targetJid });
 
-                // Humanized stagger: wait 3–7 seconds between each DM to avoid rate-limiting
-                const staggerDelay = Math.floor(Math.random() * 4000) + 3000;
-                await new Promise((resolve) => setTimeout(resolve, staggerDelay));
-
-                // Send detailed registration info via DM (guaranteed delivery)
-                const dmMessage = `🎁 *Welcome!* You just joined *${groupName}*.\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nUnlocks company referrals! Register in 5 seconds to get searched by others in the group:\n👉 \`${prefix}reg-ref <companyName>\`\n\n💡 *Benefits:*\n- Unlocks search access to see others' referrals\n- Helps others connect with you for opportunities\n\n_(🎓 Students/Unemployed: register as *Student* or *Unemployed*)_`;
-
-                try {
-                  await sendHumanLikeResponse(sock, targetJid, { text: dmMessage });
-                } catch (dmErr) {
-                  console.error(`[Bot] Failed to send DM welcome to ${targetJid}:`, dmErr);
-                }
+                // --- WELCOME DMs DISABLED ---
+                // DMs were causing cascading Connection Closed errors when the socket
+                // disconnected during the stagger delays. The group mention below
+                // is sufficient to notify new joiners.
+                // To re-enable, uncomment the DM block below and add connection guards.
               }
             } catch (err) {
               console.error(`[Bot] Failed to verify registration status for participant ${cleanedParticipant}:`, err);
             }
           }
 
-          // Send a short group welcome message after an extra delay (35s total from join)
+          // Send a short group welcome message after an extra delay
           // to allow WhatsApp cipher key exchange to complete for the new member
           if (unregisteredMentions.length > 0) {
-            setTimeout(async () => {
+            trackedTimeout(async () => {
+              // GUARD: Check connection again before sending
+              if (!isConnected) {
+                console.log('[Bot] Skipping group welcome — connection lost during delay.');
+                return;
+              }
               try {
                 const mentionTags = unregisteredMentions.map(u => `@${u.targetJid.split('@')[0]}`).join(' ');
                 const mentionJids = unregisteredMentions.map(u => u.targetJid);
 
-                const groupWelcome = `🎁 *Welcome!* ${mentionTags}\n\nDon't forget to register with \`${prefix}reg-ref <companyName>\` to unlock referral access! Check your DMs for details. 💬`;
+                const groupWelcome = `🎁 *Welcome!* ${mentionTags}\n\nRegister with \`${prefix}reg-ref <companyName>\` to unlock referral access! 💬`;
 
                 await sendHumanLikeResponse(sock, id, {
                   text: groupWelcome,
                   mentions: mentionJids
                 });
               } catch (grpErr) {
+                if (!isConnected) return; // Swallow if disconnected
                 console.error('[Bot] Failed to send group welcome message:', grpErr);
               }
             }, 20000); // Additional 20s delay (35s total from join)
           }
         } catch (err) {
+          if (!isConnected) return;
           console.error('[Bot] Failed to process delayed welcome message:', err);
         }
       }, 15000);

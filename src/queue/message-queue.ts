@@ -2,6 +2,7 @@ import { Queue, Worker } from 'bullmq';
 import { createRedisConnection } from '../db/redis';
 import { BufferJSON, proto } from '@whiskeysockets/baileys';
 import { handleIncomingMessage } from '../commands';
+import { isSocketConnected } from '../bot';
 
 // Singleton Queue instance
 let messageQueue: Queue | null = null;
@@ -119,8 +120,8 @@ export function setupWorker(getSocket: () => any, concurrency: number = 5): Work
       const msg = JSON.parse(messageStr, BufferJSON.reviver) as proto.IWebMessageInfo;
 
       const sock = getSocket();
-      if (!sock) {
-        throw new Error('[Worker] Socket is not active or ready yet.');
+      if (!sock || !isSocketConnected()) {
+        throw new Error('[Worker] Socket is not connected. Will retry via backoff.');
       }
 
       try {

@@ -31,36 +31,39 @@ export function setupQueue(): Queue {
     },
   });
 
-  // Schedule repeatable company verification cron job (runs twice a day: at midnight and noon)
-  messageQueue.add(
-    'company-verification-cron',
-    {},
-    {
-      repeat: {
-        pattern: '0 0,12 * * *',
-      },
-      jobId: 'company-verification-cron-job',
+  // Clean up and schedule repeatable jobs
+  messageQueue.getRepeatableJobs().then(async (jobs) => {
+    // Remove old repeatable jobs to prevent duplicates or stale cron schedules
+    for (const job of jobs) {
+      if (job.name === 'group-analytics-cron' || job.name === 'company-verification-cron') {
+        await messageQueue?.removeRepeatableByKey(job.key);
+        console.log(`[Queue] Removed old repeatable job: ${job.name} (${job.pattern})`);
+      }
     }
-  ).then(() => {
-    console.log('[Queue] Repeatable company verification cron job successfully scheduled');
-  }).catch((err) => {
-    console.error('[Queue] Failed to schedule company verification cron:', err);
-  });
 
-  // Schedule repeatable group analytics cron job (runs daily at midnight)
-  messageQueue.add(
-    'group-analytics-cron',
-    {},
-    {
-      repeat: {
-        pattern: '0 0 * * *',
-      },
-      jobId: 'group-analytics-cron-job',
-    }
-  ).then(() => {
-    console.log('[Queue] Repeatable group analytics cron job successfully scheduled');
+    // Schedule repeatable company verification cron job (runs twice a day: at midnight and noon)
+    await messageQueue?.add(
+      'company-verification-cron',
+      {},
+      {
+        repeat: { pattern: '0 0,12 * * *' },
+        jobId: 'company-verification-cron-job',
+      }
+    );
+    console.log('[Queue] Repeatable company verification cron job successfully scheduled');
+
+    // Schedule repeatable group analytics cron job (runs daily at 8:00 PM / 20:00)
+    await messageQueue?.add(
+      'group-analytics-cron',
+      {},
+      {
+        repeat: { pattern: '0 20 * * *' },
+        jobId: 'group-analytics-cron-job',
+      }
+    );
+    console.log('[Queue] Repeatable group analytics cron job successfully scheduled (Every day at 8:00 PM)');
   }).catch((err) => {
-    console.error('[Queue] Failed to schedule group analytics cron:', err);
+    console.error('[Queue] Failed to setup repeatable cron jobs:', err);
   });
 
   console.log('[Queue] Message queue successfully initialized');
@@ -147,11 +150,10 @@ export function setupWorker(getSocket: () => any, concurrency: number = 5): Work
           // Find group IDs that have messages in the last 24 hours
           const activeGroups = await db.collection('group_messages').aggregate([
             { $match: { timestamp: { $gte: oneDayAgo } } },
-            { $group: { _id: '$groupId', count: { $sum: 1 } } },
-            { $match: { count: { $gte: 10 } } } // Minimum 10 messages required
+            { $group: { _id: '$groupId', count: { $sum: 1 } } }
           ]).toArray();
 
-          console.log(`[Worker] Found ${activeGroups.length} groups with >= 10 messages in the last 24h.`);
+          console.log(`[Worker] Found ${activeGroups.length} groups with messages in the last 24h.`);
 
           for (const grp of activeGroups) {
             await runGroupAnalytics(sock, grp._id);

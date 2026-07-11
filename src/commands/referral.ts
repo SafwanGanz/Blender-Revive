@@ -1469,11 +1469,11 @@ export const analyticsCommand: Command = {
         timestamp: { $gte: oneDayAgo }
       });
 
-      if (count < 10) {
+      if (count < 15) {
         await sendHumanLikeResponse(
           sock,
           jid,
-          { text: `⚠️ *Not enough data to run analytics today.* Minimum 10 group messages are required in the past 24 hours (Current: ${count}).` },
+          { text: `⚠️ *Not enough data to run analytics today.* Minimum 15 group messages are required in the past 24 hours (Current: ${count}).` },
           { quoted: msg }
         );
         return;

@@ -30,8 +30,13 @@ export async function runGroupAnalytics(sock: any, groupId: string): Promise<voi
       .sort({ timestamp: 1 })
       .toArray();
 
-    if (messages.length < 10) {
-      console.log(`[Analytics] Skipping group ${groupId} - only has ${messages.length} messages (minimum 10 required).`);
+    if (messages.length < 15) {
+      console.log(`[Analytics] Skipping group ${groupId} - only has ${messages.length} messages (minimum 15 required).`);
+      if (messages.length > 0) {
+        await sendHumanLikeResponse(sock, groupId, {
+          text: `⚠️ *Not enough messages to generate daily analytics.* A minimum of 15 messages are required in the past 24 hours (Current: ${messages.length}).`
+        });
+      }
       return;
     }
 
@@ -94,7 +99,7 @@ Please output the response exactly in this JSON format:
     let aiResponseText = '';
     try {
       const model = ai.getGenerativeModel({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-flash-latest',
         generationConfig: {
           responseMimeType: 'application/json'
         }

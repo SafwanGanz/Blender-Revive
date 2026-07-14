@@ -78,6 +78,7 @@ ${chatLog}
 Your task is to identify:
 1. **Most productive person**: Select the user JID (in format "number@s.whatsapp.net" or "number@lid") who asked or answered good technical questions, helped others, or shared valuable technical info. Explain briefly why they were chosen.
 2. **Most annoying topic**: Give the topic name that was repetitive, annoying, spammy, or complaining, and identify the user JID (in format "number@s.whatsapp.net" or "number@lid") who initiated or was most responsible/annoying about it.
+3. **Group Story / Summary**: Write a concise summary of the key things that happened in the group today, as bullet points (maximum 10 points). Write from a third-person point of view. Use the real display names of users (e.g. "Virat Pandey asked about...") but do NOT include any JIDs, phone numbers, or @tags. Focus on the topics discussed, decisions made, questions asked, problems solved, interesting moments, and general vibe of the group.
 
 Please output the response exactly in this JSON format:
 {
@@ -91,7 +92,11 @@ Please output the response exactly in this JSON format:
     "jid": "user_jid_here or empty string if not found",
     "name": "user_name_here",
     "reason": "short explanation of why this topic/person was annoying"
-  }
+  },
+  "summary": [
+    "First point about what happened today",
+    "Second point about another topic or event"
+  ]
 }
 `;
 
@@ -116,7 +121,8 @@ Please output the response exactly in this JSON format:
     // 6. Parse result
     let result = {
       productive: { jid: '', name: '', reason: 'Not found today' },
-      annoying: { topic: 'Not found today', jid: '', name: '', reason: '' }
+      annoying: { topic: 'Not found today', jid: '', name: '', reason: '' },
+      summary: [] as string[]
     };
 
     try {
@@ -155,6 +161,15 @@ Please output the response exactly in this JSON format:
       }
     }
 
+    // Build group story summary (max 10 points, no user tags)
+    let storySummary = '';
+    if (result.summary && Array.isArray(result.summary) && result.summary.length > 0) {
+      const points = result.summary.slice(0, 10);
+      storySummary = points.map((point, i) => `  ${i + 1}. ${point}`).join('\n');
+    } else {
+      storySummary = '  _No notable stories today._';
+    }
+
     const reportMessage = `📊 *Daily Group Analytics (Past 24 Hours)* 📊
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -166,6 +181,9 @@ Please output the response exactly in this JSON format:
 
 🙄 *Most Annoying Topic:*
 👉 ${annoyingLine}
+
+📖 *Today's Group Story:*
+${storySummary}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 _Generated automatically using Gemini AI_ 🤖`;

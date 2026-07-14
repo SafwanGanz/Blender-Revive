@@ -52,16 +52,16 @@ export function setupQueue(): Queue {
     );
     console.log('[Queue] Repeatable company verification cron job successfully scheduled');
 
-    // Schedule repeatable group analytics cron job (runs daily at 8:00 PM / 20:00)
+    // Schedule repeatable group analytics cron job (runs daily at 11:00 PM IST)
     await messageQueue?.add(
       'group-analytics-cron',
       {},
       {
-        repeat: { pattern: '0 20 * * *' },
+        repeat: { pattern: '0 23 * * *', tz: 'Asia/Kolkata' },
         jobId: 'group-analytics-cron-job',
       }
     );
-    console.log('[Queue] Repeatable group analytics cron job successfully scheduled (Every day at 8:00 PM)');
+    console.log('[Queue] Repeatable group analytics cron job successfully scheduled (Every day at 11:00 PM IST)');
   }).catch((err) => {
     console.error('[Queue] Failed to setup repeatable cron jobs:', err);
   });

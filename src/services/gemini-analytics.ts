@@ -69,33 +69,33 @@ export async function runGroupAnalytics(sock: any, groupId: string): Promise<voi
 
     // 4. Construct prompt for Gemini
     const prompt = `
-You are a helpful group chat assistant. You are analyzing the chat log of a WhatsApp group from the past 24 hours.
+You are a witty, slightly sarcastic, and highly entertaining group chat assistant. You are analyzing the chat log of a WhatsApp group from the past 24 hours.
 Below is the chat transcript:
 ---
 ${chatLog}
 ---
 
 Your task is to identify:
-1. **Most productive person**: Select the user JID (in format "number@s.whatsapp.net" or "number@lid") who asked or answered good technical questions, helped others, or shared valuable technical info. Explain briefly why they were chosen.
-2. **Most annoying topic**: Give the topic name that was repetitive, annoying, spammy, or complaining, and identify the user JID (in format "number@s.whatsapp.net" or "number@lid") who initiated or was most responsible/annoying about it.
-3. **Group Story / Summary**: Write a concise summary of the key things that happened in the group today, as bullet points (maximum 10 points). Write from a third-person point of view. Use the real display names of users (e.g. "Virat Pandey asked about...") but do NOT include any JIDs, phone numbers, or @tags. Focus on the topics discussed, decisions made, questions asked, problems solved, interesting moments, and general vibe of the group.
+1. **Most productive person**: Select the user JID (in format "number@s.whatsapp.net" or "number@lid") who asked or answered good technical questions, helped others, or shared valuable technical info. Explain briefly and clearly why they were chosen.
+2. **Most annoying topic**: Give the topic name that was repetitive, annoying, spammy, complaining, or caused unnecessary drama, and identify the user JID (in format "number@s.whatsapp.net" or "number@lid") who initiated or was most responsible. Write the reason with a humorous/sarcastic pinch.
+3. **Group Story / Summary**: Write a series of highly engaging, savage, witty, and humorous summary points (maximum 10 points) of the key discussions, events, drama, and moments that took place in the group today. Do not write generic, dry summary bullet points. Highlight arguments, funny remarks, technical debates, or ridiculous statements with a lighthearted, sarcastic, or roast-like twist. Write from a third-person point of view. Use the real display names of users (e.g. "Virat Pandey asked about...") but do NOT include any JIDs, phone numbers, or @tags. Ensure it is captivating so group members are excited and curious to read it.
 
 Please output the response exactly in this JSON format:
 {
   "productive": {
     "jid": "user_jid_here or empty string if not found",
     "name": "user_name_here",
-    "reason": "short explanation of why they were chosen or 'No outstanding productive technical discussions today.'"
+    "reason": "explanation of why they were chosen or 'No outstanding productive technical discussions today.'"
   },
   "annoying": {
     "topic": "topic name or 'Not found today'",
     "jid": "user_jid_here or empty string if not found",
     "name": "user_name_here",
-    "reason": "short explanation of why this topic/person was annoying"
+    "reason": "explanation of why this topic/person was annoying"
   },
   "summary": [
-    "First point about what happened today",
-    "Second point about another topic or event"
+    "Savage/funny story point 1",
+    "Savage/funny story point 2"
   ]
 }
 `;
@@ -197,9 +197,9 @@ Please output the response exactly in this JSON format:
     let storySummary = '';
     if (result.summary && Array.isArray(result.summary) && result.summary.length > 0) {
       const points = result.summary.slice(0, 10);
-      storySummary = points.map((point, i) => `  ${i + 1}. ${point}`).join('\n');
+      storySummary = points.map((point) => `🔹 ${point}`).join('\n\n');
     } else {
-      storySummary = '  _No notable stories today._';
+      storySummary = '🔹 _No notable stories today._';
     }
 
     const reportMessage = `📊 *Daily Group Analytics (Past 24 Hours)* 📊
@@ -208,13 +208,16 @@ Please output the response exactly in this JSON format:
 🏆 *Most Productive Person (Technical Q&A/Help):*
 👉 ${productiveLine}
 
-📈 *Most Active Today (Count based):*
+📈 *Most Active Today:*
 👉 ${mostMessagedTag} (${maxCount} messages)
 
 🙄 *Most Annoying Topic:*
 👉 ${annoyingLine}
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 📖 *Today's Group Story:*
+
 ${storySummary}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━

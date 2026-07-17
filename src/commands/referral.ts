@@ -492,11 +492,16 @@ export const companyCommand: Command = {
         }
       }
 
-      // Sort display names alphabetically within each rank
-      const sortByDisplayName = (a: any, b: any) => a.displayName.localeCompare(b.displayName);
-      rankA.sort(sortByDisplayName);
-      rankB.sort(sortByDisplayName);
-      unranked.sort(sortByDisplayName);
+      // Sort companies by user count descending, and then alphabetically by display name within each rank
+      const sortByCountThenName = (a: any, b: any) => {
+        if (b.count !== a.count) {
+          return b.count - a.count;
+        }
+        return a.displayName.localeCompare(b.displayName);
+      };
+      rankA.sort(sortByCountThenName);
+      rankB.sort(sortByCountThenName);
+      unranked.sort(sortByCountThenName);
 
       let text = `🏢 *Registered Companies List*\n`;
       text += `━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;

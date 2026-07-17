@@ -113,6 +113,29 @@ To create a new command:
 
 ---
 
+## Bot Dashboard (Angular & Express API)
+
+A clean, premium web-based dashboard is available under the `dashboard/` directory, visualizing bot statistics and logs from MongoDB.
+
+### Running the API Server
+Exposes metric endpoints on port `3001` (configurable in `.env`).
+```bash
+cd dashboard/server
+npm install
+npm run build
+npm start
+```
+
+### Running the Angular App
+Serves the web UI on http://localhost:4200.
+```bash
+cd dashboard/client
+npm install
+npx ng serve
+```
+
+---
+
 ## Architecture Flow
 
 ```mermaid

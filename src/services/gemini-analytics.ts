@@ -100,35 +100,53 @@ Please output the response exactly in this JSON format:
 }
 `;
 
-    // 5. Query Gemini model with retry logic for transient errors (503, 429)
-    const MAX_RETRIES = 3;
+    // 5. Query Gemini model with retry logic & fallback models for robustness
+    const modelsToTry = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+    const MAX_RETRIES_PER_MODEL = 2;
     let aiResponseText = '';
-    const model = ai.getGenerativeModel({
-      model: 'gemini-flash-latest',
-      generationConfig: {
-        responseMimeType: 'application/json'
-      }
-    });
+    let lastError: any = null;
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const responseResult = await model.generateContent(prompt);
-        aiResponseText = responseResult.response.text();
-        break; // Success, exit retry loop
-      } catch (apiErr: any) {
-        const status = apiErr?.status || apiErr?.response?.status;
-        const isRetryable = status === 503 || status === 429;
+    modelLoop: for (const modelName of modelsToTry) {
+      const model = ai.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      });
 
-        if (isRetryable && attempt < MAX_RETRIES) {
-          const backoffMs = 5000 * Math.pow(2, attempt - 1); // 5s, 10s, 20s
-          console.warn(`[Analytics] Gemini API returned ${status}, retrying in ${backoffMs / 1000}s (attempt ${attempt}/${MAX_RETRIES})...`);
-          await new Promise(resolve => setTimeout(resolve, backoffMs));
-        } else {
-          console.error(`[Analytics] Gemini API call failed after ${attempt} attempt(s):`, apiErr);
-          throw apiErr;
+      console.log(`[Analytics] Trying Gemini model: ${modelName}`);
+
+      for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
+        try {
+          const responseResult = await model.generateContent(prompt);
+          aiResponseText = responseResult.response.text();
+          console.log(`[Analytics] Success with model: ${modelName}`);
+          break modelLoop; // Success! Exit both loops.
+        } catch (apiErr: any) {
+          lastError = apiErr;
+          const status = apiErr?.status || apiErr?.response?.status;
+          const errMsg = apiErr?.message || '';
+          const isRetryable = status === 503 || status === 429 || 
+                              errMsg.includes('503') || errMsg.includes('429') || 
+                              errMsg.includes('Service Unavailable') || errMsg.includes('high demand');
+
+          if (isRetryable && attempt < MAX_RETRIES_PER_MODEL) {
+            const backoffMs = 3000 * Math.pow(2, attempt - 1); // 3s, 6s
+            console.warn(`[Analytics] Model ${modelName} returned retryable error (status: ${status || 'unknown'}, msg: ${errMsg}), retrying in ${backoffMs / 1000}s (attempt ${attempt}/${MAX_RETRIES_PER_MODEL})...`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          } else {
+            console.warn(`[Analytics] Model ${modelName} failed on attempt ${attempt}. Error: ${errMsg}`);
+            break; // Break retry loop, try next model in modelsToTry
+          }
         }
       }
     }
+
+    if (!aiResponseText) {
+      console.error(`[Analytics] All Gemini models failed to generate content.`);
+      throw lastError || new Error('All Gemini models failed');
+    }
+
 
     console.log('[Analytics] Gemini raw response:', aiResponseText);
 

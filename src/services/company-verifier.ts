@@ -328,11 +328,17 @@ export async function verifyAndNormalizeCompany(companyName: string): Promise<Co
     console.warn(`[Verifier] GEMINI_API_KEY not found in environment. Using local fallback rules.`);
     resolved = resolveLocalFallback(companyName);
   } else {
-    try {
-      console.log(`[Verifier] Cache MISS. Querying Gemini for: "${companyName}"...`);
-      const genAI = new GoogleGenerativeAI(apiKey);
+    // Try multiple models with fallback and retry logic
+    const modelsToTry = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+    const MAX_RETRIES_PER_MODEL = 2;
+    let responseText = '';
+    let lastError: any = null;
+
+    const genAI = new GoogleGenerativeAI(apiKey);
+
+    modelLoop: for (const modelName of modelsToTry) {
       const model = genAI.getGenerativeModel({
-        model: 'gemini-flash-latest', // High performance, fast, and structured output support
+        model: modelName,
         generationConfig: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -366,32 +372,59 @@ export async function verifyAndNormalizeCompany(companyName: string): Promise<Co
         },
       });
 
-      const prompt = `Analyze, normalize, and verify the company input.
+      for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
+        try {
+          console.log(`[Verifier] Querying model ${modelName} for "${companyName}" (attempt ${attempt}/${MAX_RETRIES_PER_MODEL})...`);
+          const prompt = `Analyze, normalize, and verify the company input.
 Input raw company name: "${companyName}"`;
 
-      const response = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        systemInstruction: `You are an expert corporate registry verifier and deduplication agent. Normalize raw company names (e.g. "TCS", "tata consultancy" -> "Tata_Consultancy_Services"). Categorize them as Rank A (Fortune 500, major MNCs, national giants), Rank B (funded startups, established mid-size companies), or unranked (small startups, test entries, students, unemployed). Ensure canonicalName uses Title_Case_With_Underscores.`,
-      });
+          const response = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            systemInstruction: `You are an expert corporate registry verifier and deduplication agent. Normalize raw company names (e.g. "TCS", "tata consultancy" -> "Tata_Consultancy_Services"). Categorize them as Rank A (Fortune 500, major MNCs, national giants), Rank B (funded startups, established mid-size companies), or unranked (small startups, test entries, students, unemployed). Ensure canonicalName uses Title_Case_With_Underscores.`,
+          });
 
-      const responseText = response.response.text();
-      const parsed = JSON.parse(responseText);
+          responseText = response.response.text();
+          console.log(`[Verifier] Success with model: ${modelName}`);
+          break modelLoop;
+        } catch (apiErr: any) {
+          lastError = apiErr;
+          const status = apiErr?.status || apiErr?.response?.status;
+          const errMsg = apiErr?.message || '';
+          const isRetryable = status === 503 || status === 429 || 
+                              errMsg.includes('503') || errMsg.includes('429') || 
+                              errMsg.includes('Service Unavailable') || errMsg.includes('high demand');
 
-      // Sanitize the canonical name format to ensure underscores and correct characters
-      const sanitizedCanonical = parsed.canonicalName
-        .trim()
-        .replace(/[\s]+/g, '_');
+          if (isRetryable && attempt < MAX_RETRIES_PER_MODEL) {
+            const backoffMs = 2000 * Math.pow(2, attempt - 1); // 2s
+            console.warn(`[Verifier] Model ${modelName} returned retryable error (status: ${status || 'unknown'}, msg: ${errMsg}), retrying in ${backoffMs / 1000}s...`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          } else {
+            console.warn(`[Verifier] Model ${modelName} failed on attempt ${attempt}. Error: ${errMsg}`);
+            break; // Try next model
+          }
+        }
+      }
+    }
 
-      resolved = {
-        canonicalName: sanitizedCanonical,
-        displayName: parsed.displayName,
-        status: parsed.status,
-        rank: parsed.rank,
-        justification: parsed.justification,
-      };
-    } catch (err) {
-      console.error(`[Verifier] Gemini verification failed for "${companyName}". Falling back to local rules:`, err);
+    if (!responseText) {
+      console.error(`[Verifier] All Gemini models failed to verify "${companyName}". Falling back to local rules.`);
       resolved = resolveLocalFallback(companyName);
+    } else {
+      try {
+        const parsed = JSON.parse(responseText);
+        const sanitizedCanonical = parsed.canonicalName.trim().replace(/[\s]+/g, '_');
+
+        resolved = {
+          canonicalName: sanitizedCanonical,
+          displayName: parsed.displayName,
+          status: parsed.status,
+          rank: parsed.rank,
+          justification: parsed.justification,
+        };
+      } catch (err) {
+        console.error(`[Verifier] Gemini verification JSON parse failed for "${companyName}". Falling back to local:`, err);
+        resolved = resolveLocalFallback(companyName);
+      }
     }
   }
 
@@ -476,73 +509,75 @@ export async function runDatabaseCompanyNormalization(): Promise<{ checked: numb
         cachedResults.set(rawName, doc);
       }
     } else {
-      // Retry logic for rate limits
-      const MAX_RETRIES = 2;
-      let attempt = 0;
+      const modelsToTry = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+      const MAX_RETRIES_PER_MODEL = 2;
       let success = false;
+      let lastError: any = null;
 
-      while (attempt <= MAX_RETRIES && !success) {
-        try {
-          attempt++;
-          console.log(`[Verifier] Batch querying Gemini for ${uncachedNames.length} companies (attempt ${attempt}/${MAX_RETRIES + 1})...`);
-          apiCalls++;
+      modelLoop: for (const modelName of modelsToTry) {
+        let attempt = 0;
+        while (attempt < MAX_RETRIES_PER_MODEL) {
+          try {
+            attempt++;
+            console.log(`[Verifier] Batch querying Gemini for ${uncachedNames.length} companies using ${modelName} (attempt ${attempt}/${MAX_RETRIES_PER_MODEL})...`);
+            apiCalls++;
 
-          const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({
-            model: 'gemini-flash-latest',
-            generationConfig: {
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  companies: {
-                    type: SchemaType.ARRAY,
-                    items: {
-                      type: SchemaType.OBJECT,
-                      properties: {
-                        inputName: {
-                          type: SchemaType.STRING,
-                          description: 'The exact input company name from the list (unchanged).',
+            const genAI = new GoogleGenerativeAI(apiKey);
+            const model = genAI.getGenerativeModel({
+              model: modelName,
+              generationConfig: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: SchemaType.OBJECT,
+                  properties: {
+                    companies: {
+                      type: SchemaType.ARRAY,
+                      items: {
+                        type: SchemaType.OBJECT,
+                        properties: {
+                          inputName: {
+                            type: SchemaType.STRING,
+                            description: 'The exact input company name from the list (unchanged).',
+                          },
+                          canonicalName: {
+                            type: SchemaType.STRING,
+                            description: 'Standardized canonical name in Title_Case_With_Underscores. e.g. "Tata_Consultancy_Services" for TCS, "Google" for Google.',
+                          },
+                          displayName: {
+                            type: SchemaType.STRING,
+                            description: 'Human-readable properly capitalized name. e.g. "Tata Consultancy Services".',
+                          },
+                          status: {
+                            type: SchemaType.STRING,
+                            enum: ['registered', 'unregistered'],
+                            description: 'Whether this is a real, officially registered company. "unregistered" for fake/test names, students, or unemployed.',
+                          },
+                          rank: {
+                            type: SchemaType.STRING,
+                            enum: ['A', 'B', 'unranked'],
+                            description: 'A = Fortune 500, global/national enterprises. B = funded startups, established mid-size. unranked = small/unknown/student/unemployed.',
+                          },
+                          justification: {
+                            type: SchemaType.STRING,
+                            description: 'One sentence explaining the categorization.',
+                          },
                         },
-                        canonicalName: {
-                          type: SchemaType.STRING,
-                          description: 'Standardized canonical name in Title_Case_With_Underscores. e.g. "Tata_Consultancy_Services" for TCS, "Google" for Google.',
-                        },
-                        displayName: {
-                          type: SchemaType.STRING,
-                          description: 'Human-readable properly capitalized name. e.g. "Tata Consultancy Services".',
-                        },
-                        status: {
-                          type: SchemaType.STRING,
-                          enum: ['registered', 'unregistered'],
-                          description: 'Whether this is a real, officially registered company. "unregistered" for fake/test names, students, or unemployed.',
-                        },
-                        rank: {
-                          type: SchemaType.STRING,
-                          enum: ['A', 'B', 'unranked'],
-                          description: 'A = Fortune 500, global/national enterprises. B = funded startups, established mid-size. unranked = small/unknown/student/unemployed.',
-                        },
-                        justification: {
-                          type: SchemaType.STRING,
-                          description: 'One sentence explaining the categorization.',
-                        },
+                        required: ['inputName', 'canonicalName', 'displayName', 'status', 'rank', 'justification'],
                       },
-                      required: ['inputName', 'canonicalName', 'displayName', 'status', 'rank', 'justification'],
                     },
                   },
-                },
-                required: ['companies'],
-              } as any,
-            },
-          });
+                  required: ['companies'],
+                } as any,
+              },
+            });
 
-          const companyList = uncachedNames.map((name, i) => `${i + 1}. "${name}"`).join('\n');
+            const companyList = uncachedNames.map((name, i) => `${i + 1}. "${name}"`).join('\n');
 
-          const prompt = `Analyze, normalize, verify, and rank ALL of the following ${uncachedNames.length} company names. Return a result for each one.\n\nCompany list:\n${companyList}`;
+            const prompt = `Analyze, normalize, verify, and rank ALL of the following ${uncachedNames.length} company names. Return a result for each one.\n\nCompany list:\n${companyList}`;
 
-          const response = await model.generateContent({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            systemInstruction: `You are an expert corporate registry verifier and deduplication agent. You will receive a batch of raw company names. For EACH name, normalize it (e.g. "TCS", "tata consultancy" -> "Tata_Consultancy_Services"), determine if it's a real registered company, and rank it:
+            const response = await model.generateContent({
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              systemInstruction: `You are an expert corporate registry verifier and deduplication agent. You will receive a batch of raw company names. For EACH name, normalize it (e.g. "TCS", "tata consultancy" -> "Tata_Consultancy_Services"), determine if it's a real registered company, and rank it:
 - Rank A: Fortune 500, major MNCs, national giants (TCS, Google, Microsoft, Infosys, Amazon, Accenture, Wipro, Oracle, Salesforce, etc.)
 - Rank B: Well-known funded startups, established mid-size companies (Cred, Razorpay, Zomato, Swiggy, Sprinklr, etc.)
 - unranked: Small local startups, unknown entities, personal/test names, students, unemployed
@@ -553,81 +588,93 @@ Rules:
 - "Student", "Unemployed" = status: unregistered, rank: unranked
 - Return the inputName EXACTLY as provided (do not modify it)
 - Return one entry for EACH input company name`,
-          });
+            });
 
-          const responseText = response.response.text();
-          const parsed = JSON.parse(responseText);
-          const batchResults: Array<{ inputName: string; canonicalName: string; displayName: string; status: string; rank: string; justification: string }> = parsed.companies || [];
+            const responseText = response.response.text();
+            const parsed = JSON.parse(responseText);
+            const batchResults: Array<{ inputName: string; canonicalName: string; displayName: string; status: string; rank: string; justification: string }> = parsed.companies || [];
 
-          console.log(`[Verifier] Gemini returned ${batchResults.length} results for ${uncachedNames.length} companies.`);
+            console.log(`[Verifier] Gemini returned ${batchResults.length} results for ${uncachedNames.length} companies.`);
 
-          // Build a lookup map from inputName -> result
-          const resultMap = new Map<string, typeof batchResults[0]>();
-          for (const r of batchResults) {
-            resultMap.set(r.inputName, r);
-          }
-
-          // Cache each result
-          for (const rawName of uncachedNames) {
-            const geminiResult = resultMap.get(rawName);
-            const lookupKey = toLookupKey(rawName);
-            let doc: CompanyVerificationDoc;
-
-            if (geminiResult) {
-              const sanitizedCanonical = geminiResult.canonicalName.trim().replace(/[\s]+/g, '_');
-              doc = {
-                _id: lookupKey,
-                canonicalName: sanitizedCanonical,
-                displayName: geminiResult.displayName,
-                status: geminiResult.status as 'registered' | 'unregistered',
-                rank: geminiResult.rank as 'A' | 'B' | 'unranked',
-                justification: geminiResult.justification,
-                verifiedAt: new Date(),
-              };
-            } else {
-              // Gemini didn't return this one — use local fallback
-              console.warn(`[Verifier] Gemini batch missed "${rawName}". Using local fallback.`);
-              const resolved = resolveLocalFallback(rawName);
-              doc = { _id: lookupKey, ...resolved, verifiedAt: new Date() };
+            // Build a lookup map from inputName -> result
+            const resultMap = new Map<string, typeof batchResults[0]>();
+            for (const r of batchResults) {
+              resultMap.set(r.inputName, r);
             }
 
-            try {
-              await verificationsCol.updateOne({ _id: lookupKey }, { $set: doc }, { upsert: true });
-              console.log(`[Verifier] Cached "${rawName}" -> ${doc.canonicalName} (${doc.rank})`);
-            } catch (dbErr) {
-              console.error(`[Verifier] Failed to cache "${rawName}":`, dbErr);
-            }
-            cachedResults.set(rawName, doc);
-          }
-          success = true;
-        } catch (err: any) {
-          const is429 = err?.status === 429;
+            // Cache each result
+            for (const rawName of uncachedNames) {
+              const geminiResult = resultMap.get(rawName);
+              const lookupKey = toLookupKey(rawName);
+              let doc: CompanyVerificationDoc;
 
-          if (is429 && attempt <= MAX_RETRIES) {
-            // Extract retry delay from error response (default 60s)
-            let waitSeconds = 60;
-            if (err?.errorDetails) {
-              for (const detail of err.errorDetails) {
-                if (detail['@type']?.includes('RetryInfo') && detail.retryDelay) {
-                  const parsed = parseInt(detail.retryDelay);
-                  if (!isNaN(parsed)) waitSeconds = parsed + 5; // Add 5s buffer
+              if (geminiResult) {
+                const sanitizedCanonical = geminiResult.canonicalName.trim().replace(/[\s]+/g, '_');
+                doc = {
+                  _id: lookupKey,
+                  canonicalName: sanitizedCanonical,
+                  displayName: geminiResult.displayName,
+                  status: geminiResult.status as 'registered' | 'unregistered',
+                  rank: geminiResult.rank as 'A' | 'B' | 'unranked',
+                  justification: geminiResult.justification,
+                  verifiedAt: new Date(),
+                };
+              } else {
+                // Gemini didn't return this one — use local fallback
+                console.warn(`[Verifier] Gemini batch missed "${rawName}". Using local fallback.`);
+                const resolved = resolveLocalFallback(rawName);
+                doc = { _id: lookupKey, ...resolved, verifiedAt: new Date() };
+              }
+
+              try {
+                await verificationsCol.updateOne({ _id: lookupKey }, { $set: doc }, { upsert: true });
+                console.log(`[Verifier] Cached "${rawName}" -> ${doc.canonicalName} (${doc.rank})`);
+              } catch (dbErr) {
+                console.error(`[Verifier] Failed to cache "${rawName}":`, dbErr);
+              }
+              cachedResults.set(rawName, doc);
+            }
+            success = true;
+            break modelLoop; // Success! Exit both loops.
+          } catch (err: any) {
+            lastError = err;
+            const status = err?.status || err?.response?.status;
+            const errMsg = err?.message || '';
+            const is429 = status === 429 || errMsg.includes('429');
+            const is503 = status === 503 || errMsg.includes('503') || errMsg.includes('Service Unavailable') || errMsg.includes('high demand');
+
+            if (is429 && attempt < MAX_RETRIES_PER_MODEL) {
+              // Extract retry delay from error response (default 60s)
+              let waitSeconds = 60;
+              if (err?.errorDetails) {
+                for (const detail of err.errorDetails) {
+                  if (detail['@type']?.includes('RetryInfo') && detail.retryDelay) {
+                    const parsed = parseInt(detail.retryDelay);
+                    if (!isNaN(parsed)) waitSeconds = parsed + 5; // Add 5s buffer
+                  }
                 }
               }
+              console.warn(`[Verifier] Rate limited (429). Waiting ${waitSeconds}s before retry ${attempt + 1}/${MAX_RETRIES_PER_MODEL}...`);
+              await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+            } else if (is503 && attempt < MAX_RETRIES_PER_MODEL) {
+              const waitSeconds = 5;
+              console.warn(`[Verifier] Service unavailable (503). Waiting ${waitSeconds}s before retry ${attempt + 1}/${MAX_RETRIES_PER_MODEL}...`);
+              await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+            } else {
+              // Non-retryable error OR retries exhausted for this model.
+              console.warn(`[Verifier] Model ${modelName} failed on attempt ${attempt}. Error: ${errMsg}. Trying next model...`);
+              break; // Break the attempt loop to try next model in modelLoop
             }
-            console.warn(`[Verifier] Rate limited (429). Waiting ${waitSeconds}s before retry ${attempt + 1}/${MAX_RETRIES + 1}...`);
-            await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
-            // Continue to next attempt
-          } else {
-            // Non-429 error OR retries exhausted — DO NOT cache to local fallback (prevents poisoning)
-            const reason = is429
-              ? `Rate limit quota exhausted after ${MAX_RETRIES + 1} attempts. Daily quota may be depleted — try again later.`
-              : `Gemini API error: ${err?.message || err}`;
-            console.error(`[Verifier] Batch verification FAILED: ${reason}`);
-            console.error(`[Verifier] ${uncachedNames.length} companies remain UNVERIFIED. They will be retried on next run.`);
-            // Don't cache anything — leave them uncached so next run re-tries
-            break;
           }
         }
+      }
+
+      if (!success) {
+        const reason = lastError?.status === 429
+          ? `Rate limit quota exhausted.`
+          : `Gemini API error: ${lastError?.message || lastError}`;
+        console.error(`[Verifier] Batch verification FAILED for all models: ${reason}`);
+        console.error(`[Verifier] ${uncachedNames.length} companies remain UNVERIFIED. They will be retried on next run.`);
       }
     }
   }

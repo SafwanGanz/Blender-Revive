@@ -1,0 +1,360 @@
+// ═══════════════════════════════════════════════════
+// BlenderRevive Dashboard — Dark Glassmorphism Theme
+// ═══════════════════════════════════════════════════
+
+$bg-primary: #0a0e1a;
+$bg-card: rgba(255, 255, 255, 0.03);
+$border-card: rgba(255, 255, 255, 0.07);
+$text-primary: #f1f5f9;
+$text-secondary: #94a3b8;
+$text-muted: #64748b;
+$accent-blue: #3b82f6;
+$accent-purple: #8b5cf6;
+$accent-green: #10b981;
+$accent-amber: #f59e0b;
+$accent-red: #ef4444;
+
+.dashboard-container {
+  min-height: 100vh;
+  padding: 32px 40px;
+  max-width: 1440px;
+  margin: 0 auto;
+  animation: fadeIn 0.6s ease;
+}
+
+// ── Header ──
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 36px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid $border-card;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.logo {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: $text-primary;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.logo-icon {
+  font-size: 1.8rem;
+}
+
+.logo-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: $accent-blue;
+  background: rgba($accent-blue, 0.12);
+  padding: 4px 10px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.header-subtitle {
+  font-size: 0.85rem;
+  color: $text-muted;
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: $accent-green;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: $accent-green;
+  animation: pulse 2s infinite;
+}
+
+.last-updated {
+  font-size: 0.75rem;
+  color: $text-muted;
+}
+
+// ── Stats Grid ──
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+// ── Chart Cards ──
+.charts-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.chart-card {
+  background: $bg-card;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid $border-card;
+  border-radius: 16px;
+  padding: 24px;
+  transition: border-color 0.3s ease;
+  animation: fadeInUp 0.5s ease both;
+
+  &:hover {
+    border-color: rgba($accent-blue, 0.2);
+  }
+
+  &.wide {
+    // Already handled by grid column span
+  }
+}
+
+.chart-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: $text-secondary;
+  margin: 0 0 16px 0;
+}
+
+.chart-wrapper {
+  height: 260px;
+  position: relative;
+}
+
+.doughnut-wrapper {
+  height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// ── Data Tables ──
+.tables-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.table-card {
+  background: $bg-card;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid $border-card;
+  border-radius: 16px;
+  padding: 24px;
+  animation: fadeInUp 0.5s ease both;
+
+  &:hover {
+    border-color: rgba($accent-purple, 0.2);
+  }
+}
+
+.table-wrapper {
+  max-height: 320px;
+  overflow-y: auto;
+
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+
+  thead tr {
+    border-bottom: 1px solid $border-card;
+  }
+
+  th {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: $text-muted;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 8px 12px;
+    text-align: left;
+  }
+
+  td {
+    font-size: 0.85rem;
+    color: $text-secondary;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  tbody tr {
+    transition: background 0.2s ease;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+  }
+}
+
+.rank-cell {
+  width: 40px;
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.05);
+  color: $text-muted;
+
+  &.gold {
+    background: rgba(245, 158, 11, 0.15);
+    color: $accent-amber;
+  }
+  &.silver {
+    background: rgba(148, 163, 184, 0.15);
+    color: #cbd5e1;
+  }
+  &.bronze {
+    background: rgba(180, 83, 9, 0.15);
+    color: #d97706;
+  }
+}
+
+.name-cell {
+  font-weight: 500;
+  color: $text-primary;
+}
+
+.count-cell {
+  font-weight: 700;
+  color: $accent-blue;
+  text-align: right;
+}
+
+.reason-cell {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
+.rank-tag {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+
+  &.rank-A {
+    background: rgba($accent-blue, 0.12);
+    color: $accent-blue;
+  }
+  &.rank-B {
+    background: rgba($accent-purple, 0.12);
+    color: $accent-purple;
+  }
+  &.rank-unranked {
+    background: rgba($text-muted, 0.12);
+    color: $text-muted;
+  }
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: $text-muted;
+  font-size: 0.85rem;
+}
+
+// ── Footer ──
+.dashboard-footer {
+  text-align: center;
+  padding: 20px 0;
+  border-top: 1px solid $border-card;
+
+  p {
+    font-size: 0.75rem;
+    color: $text-muted;
+    margin: 0;
+  }
+}
+
+// ── Animations ──
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+// ── Responsive ──
+@media (max-width: 1024px) {
+  .charts-row {
+    grid-template-columns: 1fr;
+  }
+  .tables-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-container {
+    padding: 16px;
+  }
+  .dashboard-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

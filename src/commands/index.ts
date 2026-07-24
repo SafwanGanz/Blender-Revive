@@ -19,18 +19,29 @@ const commandRegistry = new Map<string, Command>();
  * Registers a new command with the registry.
  */
 export function registerCommand(command: Command) {
-  const name = command.name.toLowerCase();
-  commandRegistry.set(name, command);
-  if (name.includes('_')) {
-    commandRegistry.set(name.replace(/_/g, '-'), command);
-  }
+  /**
+   * Auto-registers all separator variants of a key:
+   *   "check_warn" → also registers "check-warn" and "checkwarn"
+   *   "un-warn"    → also registers "un_warn"  and "unwarn"
+   * This makes commands super user-friendly — users don't need to remember
+   * whether it's a hyphen, underscore, or no separator.
+   */
+  const registerAllVariants = (key: string) => {
+    const lowered = key.toLowerCase();
+    commandRegistry.set(lowered, command);
+
+    // If the key contains any separator (- or _), register all three forms
+    if (lowered.includes('_') || lowered.includes('-')) {
+      commandRegistry.set(lowered.replace(/[-_]/g, '_'), command); // underscore form
+      commandRegistry.set(lowered.replace(/[-_]/g, '-'), command); // hyphen form
+      commandRegistry.set(lowered.replace(/[-_]/g, ''),  command); // no-separator form
+    }
+  };
+
+  registerAllVariants(command.name);
   if (command.aliases) {
     for (const alias of command.aliases) {
-      const loweredAlias = alias.toLowerCase();
-      commandRegistry.set(loweredAlias, command);
-      if (loweredAlias.includes('_')) {
-        commandRegistry.set(loweredAlias.replace(/_/g, '-'), command);
-      }
+      registerAllVariants(alias);
     }
   }
 }

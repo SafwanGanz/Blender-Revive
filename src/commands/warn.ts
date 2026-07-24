@@ -285,7 +285,7 @@ export const warnCommand: Command = {
  */
 export const unwarnCommand: Command = {
   name: 'unwarn',
-  aliases: ['clearwarn', 'removewarn', 'unwarning', 'un-warn'],
+  aliases: ['clearwarn', 'removewarn', 'unwarning', 'un-warn', 'clear-warn', 'remove-warn', 'pardon', 'forgive'],
   description: 'Admin/Group-admin: Removes the most recent warning (or all warnings) from a member.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;

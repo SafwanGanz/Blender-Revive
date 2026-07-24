@@ -155,7 +155,7 @@ function formatRegDate(date: Date | string | undefined): string {
  */
 export const regRefCommand: Command = {
   name: 'reg_ref',
-  aliases: ['register_ref'],
+  aliases: ['register_ref', 'register', 'signup', 'reg', 'join'],
   description: 'Registers yourself under a company.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;
@@ -242,7 +242,7 @@ export const regRefCommand: Command = {
  */
 export const updateRefCommand: Command = {
   name: 'update_ref',
-  aliases: ['update_referral'],
+  aliases: ['update_referral', 'update', 'change_company', 'switch'],
   description: 'Updates your registered company affiliation.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;
@@ -319,7 +319,7 @@ export const updateRefCommand: Command = {
  */
 export const refListCommand: Command = {
   name: 'ref_list',
-  aliases: ['reflist'],
+  aliases: ['reflist', 'list', 'all'],
   description: 'Lists all companies and registered users.',
   execute: async (sock, msg) => {
     const jid = msg.key.remoteJid!;
@@ -430,7 +430,7 @@ export const refListCommand: Command = {
  */
 export const companyCommand: Command = {
   name: 'company',
-  aliases: ['companies', 'campnay', 'compney', 'compnay', 'findcompany', 'find_company', 'find-company'],
+  aliases: ['companies', 'campnay', 'compney', 'compnay', 'findcompany', 'find_company', 'find-company', 'comp', 'co'],
   description: 'Lists registered companies or gets users under a specific company.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;
@@ -644,6 +644,7 @@ export const companyCommand: Command = {
  */
 export const refUpdateCommand: Command = {
   name: 'ref_update',
+  aliases: ['rename_company'],
   description: 'Dev: Updates a company name globally.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;
@@ -714,6 +715,7 @@ export const refUpdateCommand: Command = {
  */
 export const refDeleteCommand: Command = {
   name: 'ref_delete',
+  aliases: ['delete', 'remove', 'unregister', 'unreg', 'deregister', 'dereg', 'leave'],
   description: 'Dev: Deletes a company and all user registrations under it.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;
@@ -780,7 +782,7 @@ export const refDeleteCommand: Command = {
  */
 export const tagunregCommand: Command = {
   name: 'tagunreg',
-  aliases: ['tagunregistered', 'tagallunregistered'],
+  aliases: ['tagunregistered', 'tagallunregistered', 'tag_unreg'],
   description: 'Dev: Mentions all group members who have not registered in the referral system.',
   execute: async (sock, msg) => {
     const jid = msg.key.remoteJid!;
@@ -881,7 +883,7 @@ export const tagunregCommand: Command = {
  */
 export const verifyCronCommand: Command = {
   name: 'verify_cron',
-  aliases: ['verify-cron', 'verifycron', 'normalize_db'],
+  aliases: ['verify-cron', 'verifycron', 'normalize_db', 'verify', 'normalize'],
   description: 'Dev: Manually runs the company verification and database normalization. Use "-flash" or "-flush" to clear stale cache first.',
   execute: async (sock, msg) => {
     const jid = msg.key.remoteJid!;
@@ -948,7 +950,7 @@ export const verifyCronCommand: Command = {
  */
 export const tagCompanyCommand: Command = {
   name: 'tag_company',
-  aliases: ['tagcompany', 'tagco'],
+  aliases: ['tagcompany', 'tagco', 'tag'],
   description: 'Admin/Group-admin: Mentions all group members registered under the given company.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;
@@ -1136,7 +1138,7 @@ export const tagCompanyCommand: Command = {
  */
 export const searchCommand: Command = {
   name: 'search',
-  aliases: ['find', 'lookup', 'whois', 'userinfo'],
+  aliases: ['find', 'lookup', 'whois', 'userinfo', 'who', 'profile'],
   description: 'Look up users or companies by name, mention, or phone. e.g. /search @user, /search Bhumik, or /search TCS.',
   execute: async (sock, msg, args) => {
     const jid = msg.key.remoteJid!;

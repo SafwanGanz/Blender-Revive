@@ -1,4 +1,4 @@
-import { Command, sendHumanLikeResponse, isSenderDev, isSenderGroupAdmin } from './index';
+import { Command, sendHumanLikeResponse, isSenderDev, isSenderGroupAdmin, getMessageText } from './index';
 import { getDb } from '../db/mongodb';
 import { batchResolvePhoneJids, storeLidPhoneMapping } from '../db/lid-phone-map';
 import { proto } from '@whiskeysockets/baileys';
@@ -782,9 +782,19 @@ export const refDeleteCommand: Command = {
  */
 export const tagunregCommand: Command = {
   name: 'tagunreg',
-  aliases: ['tagunregistered', 'tagallunregistered', 'tag_unreg'],
-  description: 'Dev: Mentions all group members who have not registered in the referral system.',
-  execute: async (sock, msg) => {
+  aliases: [
+    'tag_unreg',
+    'hidetagunreg',
+    'hidetag_unreg',
+    'tagunregistered',
+    'tagallunregistered',
+    'hidetag-unreg',
+    'tagunreg-hidden',
+    'tagunreg_hidden',
+    'hidetagunregistered'
+  ],
+  description: 'Dev: Mentions unregistered group members. Supports hidden tags (-h, -hidden flag or /hidetagunreg) and custom messages.',
+  execute: async (sock, msg, args = []) => {
     const jid = msg.key.remoteJid!;
 
     // 1. Must be in a group chat
@@ -809,9 +819,24 @@ export const tagunregCommand: Command = {
       return;
     }
 
+    // 3. Check if hidden tag mode is enabled via command alias or argument flags
+    const rawMessageText = getMessageText(msg).trim();
+    const invokedCmd = rawMessageText.startsWith(prefix)
+      ? rawMessageText.slice(prefix.length).trim().split(/\s+/)[0].toLowerCase()
+      : '';
+
+    const hiddenFlags = new Set(['-h', '-hidden', '--hidden', 'hidden', 'hide', '-hide']);
+    const isHiddenByAlias = invokedCmd.startsWith('hidetag') || invokedCmd.includes('hidden');
+    const isHiddenByFlag = args.some((arg) => hiddenFlags.has(arg.toLowerCase()));
+    const isHidden = isHiddenByAlias || isHiddenByFlag;
+
+    // Filter out hidden flags to extract any custom message text provided by user
+    const cleanArgs = args.filter((arg) => !hiddenFlags.has(arg.toLowerCase()));
+    const customMessage = cleanArgs.join(' ').trim();
+
     const referralsCollection = getDb().collection<ReferralDoc>('referrals');
 
-    // 3. Fetch all participants in the group
+    // 4. Fetch all participants in the group
     let metadata;
     try {
       metadata = await sock.groupMetadata(jid);
@@ -828,7 +853,7 @@ export const tagunregCommand: Command = {
 
     const participants = metadata.participants;
 
-    // 4. Fetch all registered users from database (excluding soft-deleted)
+    // 5. Fetch all registered users from database (excluding soft-deleted)
     const allRegistered = await referralsCollection.find({ deletedAt: { $exists: false } }).toArray();
     const registeredJids = new Set(allRegistered.map((r) => cleanUserJid(r._id)));
 
@@ -837,7 +862,7 @@ export const tagunregCommand: Command = {
     const cleanEnvBotNumber = envBotNumber.replace(/\D/g, ''); // Extract only digits
     const botJid = sock.user?.id ? cleanUserJid(sock.user.id) : '';
 
-    // 5. Filter for unregistered participants
+    // 6. Filter for unregistered participants
     const unregistered = participants.filter((p: any) => {
       const cleanJid = cleanUserJid(p.id);
       const isBot = (botJid && cleanJid === botJid) || 
@@ -855,14 +880,28 @@ export const tagunregCommand: Command = {
       return;
     }
 
-    // 6. Format and send the tagall message
-    let text = `📢 *Attention Unregistered Members!*\n\nYou have not registered under any company yet. Please register using \`${prefix}reg_ref <Company Name>\`:\n\n`;
+    // 7. Format and send the tag message
     const mentions: string[] = [];
-
     for (const member of unregistered) {
-      const phone = member.id.split('@')[0];
-      text += `@${phone} `;
       mentions.push(member.id);
+    }
+
+    let text = '';
+    if (customMessage) {
+      text = `📢 *Attention Unregistered Members!*\n\n${customMessage}\n\nPlease register using \`${prefix}reg_ref <Company Name>\``;
+    } else {
+      text = `📢 *Attention Unregistered Members!*\n\nYou have not registered under any company yet. Please register using \`${prefix}reg_ref <Company Name>\`:`;
+    }
+
+    if (isHidden) {
+      // In hidden mode, attach zero-width space characters so WhatsApp handles mentions quietly without displaying visible @phone numbers
+      text += '\u200B'.repeat(mentions.length);
+    } else {
+      text += '\n\n';
+      for (const member of unregistered) {
+        const phone = member.id.split('@')[0];
+        text += `@${phone} `;
+      }
     }
 
     await sendHumanLikeResponse(

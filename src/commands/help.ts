@@ -103,27 +103,30 @@ export const helpCommand: Command = {
 
     text += `🔍 *Find & Search*\n`;
     for (const cmd of categories.user.filter(c => ['company', 'search'].includes(c.name))) {
-      const aliasStr = cmd.aliases && cmd.aliases.length > 0 
-        ? ` (or ${cmd.aliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
-        : '';
+        const displayedAliases = cmd.aliases ? cmd.aliases.slice(0, 3) : [];
+        const aliasStr = displayedAliases.length > 0 
+          ? ` (or ${displayedAliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
+          : '';
       text += `🔹 *${prefix}${cmd.name}*${aliasStr}\n`;
       text += `   _${cmd.description}_\n\n`;
     }
 
     text += `📝 *Register & Update*\n`;
     for (const cmd of categories.user.filter(c => ['reg_ref', 'update_ref'].includes(c.name))) {
-      const aliasStr = cmd.aliases && cmd.aliases.length > 0 
-        ? ` (or ${cmd.aliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
-        : '';
+        const displayedAliases = cmd.aliases ? cmd.aliases.slice(0, 3) : [];
+        const aliasStr = displayedAliases.length > 0 
+          ? ` (or ${displayedAliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
+          : '';
       text += `🔹 *${prefix}${cmd.name}*${aliasStr}\n`;
       text += `   _${cmd.description}_\n\n`;
     }
 
     text += `👥 *Group Admin Commands*\n`;
     for (const cmd of categories.groupAdmin) {
-      const aliasStr = cmd.aliases && cmd.aliases.length > 0 
-        ? ` (or ${cmd.aliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
-        : '';
+        const displayedAliases = cmd.aliases ? cmd.aliases.slice(0, 3) : [];
+        const aliasStr = displayedAliases.length > 0 
+          ? ` (or ${displayedAliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
+          : '';
       text += `🔸 *${prefix}${cmd.name}*${aliasStr}\n`;
       text += `   _${cmd.description}_\n\n`;
     }
@@ -131,8 +134,9 @@ export const helpCommand: Command = {
     if (isDev) {
       text += `🛡️ *Developer Admin Commands*\n`;
       for (const cmd of categories.dev) {
-        const aliasStr = cmd.aliases && cmd.aliases.length > 0 
-          ? ` (or ${cmd.aliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
+        const displayedAliases = cmd.aliases ? cmd.aliases.slice(0, 3) : [];
+        const aliasStr = displayedAliases.length > 0 
+          ? ` (or ${displayedAliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
           : '';
         const isDisabled = cmd.name === 'ref_list' ? ' _[Temporarily Disabled for Users]_' : '';
         text += `👑 *${prefix}${cmd.name}*${aliasStr}${isDisabled}\n`;
@@ -142,9 +146,10 @@ export const helpCommand: Command = {
 
     text += `ℹ️ *System & Utility*\n`;
     for (const cmd of categories.utility) {
-      const aliasStr = cmd.aliases && cmd.aliases.length > 0 
-        ? ` (or ${cmd.aliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
-        : '';
+        const displayedAliases = cmd.aliases ? cmd.aliases.slice(0, 3) : [];
+        const aliasStr = displayedAliases.length > 0 
+          ? ` (or ${displayedAliases.map(a => `\`${prefix}${a}\``).join(', ')})` 
+          : '';
       text += `▫️ *${prefix}${cmd.name}*${aliasStr}\n`;
       text += `   _${cmd.description}_\n\n`;
     }

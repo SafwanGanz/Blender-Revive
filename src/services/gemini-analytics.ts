@@ -69,33 +69,39 @@ export async function runGroupAnalytics(sock: any, groupId: string): Promise<voi
 
     // 4. Construct prompt for Gemini
     const prompt = `
-You are a witty, slightly sarcastic, and highly entertaining group chat assistant. You are analyzing the chat log of a WhatsApp group from the past 24 hours.
+You are a witty, slightly sarcastic, and highly entertaining group chat analyst. You are analyzing a WhatsApp group chat from the past 24 hours.
 Below is the chat transcript:
 ---
 ${chatLog}
 ---
 
-Your task is to identify:
-1. **Most productive person**: Select the user JID (in format "number@s.whatsapp.net" or "number@lid") who asked or answered good technical questions, helped others, or shared valuable technical info. Explain briefly and clearly why they were chosen.
-2. **Most annoying topic**: Give the topic name that was repetitive, annoying, spammy, complaining, or caused unnecessary drama, and identify the user JID (in format "number@s.whatsapp.net" or "number@lid") who initiated or was most responsible. Write the reason with a humorous/sarcastic pinch.
-3. **Group Story / Summary**: Write a series of highly engaging, savage, witty, and humorous summary points (maximum 10 points) of the key discussions, events, drama, and moments that took place in the group today. Do not write generic, dry summary bullet points. Highlight arguments, funny remarks, technical debates, or ridiculous statements with a lighthearted, sarcastic, or roast-like twist. Write from a third-person point of view. Use the real display names of users (e.g. "Virat Pandey asked about...") but do NOT include any JIDs, phone numbers, or @tags. Ensure it is captivating so group members are excited and curious to read it.
+IMPORTANT RULES:
+- You MUST fill in ALL fields. NEVER return empty strings, "Not found today", or empty arrays.
+- There are ${messages.length} messages from ${Object.keys(senderCounts).length} participants — there is ALWAYS something interesting to highlight.
+- If the chat is casual/non-technical, adapt your analysis accordingly (humor, banter, hot takes, advice, and social dynamics ALL count).
 
-Please output the response exactly in this JSON format:
+Your task is to identify:
+1. **Most valuable person (MVP)**: Select the user JID (in format "number@s.whatsapp.net" or "number@lid") who contributed the most value today. "Value" is broad — it could be answering questions, sharing useful info, giving advice, organizing plans, dropping knowledge, being the voice of reason, mediating drama, or even just keeping the group alive with great energy. Explain briefly and clearly why they were chosen.
+2. **Most overblown / repetitive topic**: Identify a topic or theme that was beaten to death, got unnecessarily dramatic, went in circles, or was just plain cringe. Name the topic and identify the user JID who was most responsible for pushing it. Write the reason with a humorous/sarcastic pinch. If no single topic stands out as annoying, pick the most debated or controversial one and roast it lightly.
+3. **Group Story / Summary**: Write a series of highly engaging, savage, witty, and humorous summary points (minimum 3, maximum 10 points) of the key discussions, events, drama, vibes, and moments that took place in the group today. Cover the actual conversations that happened — who said what, what topics were discussed, what was funny, what was awkward. Do NOT write generic filler like "The group was quiet today" — dig into the actual messages. Highlight arguments, funny remarks, hot takes, debates, or ridiculous statements with a lighthearted, sarcastic, or roast-like twist. Write from a third-person point of view. Use the real display names of users (e.g. "Virat Pandey asked about...") but do NOT include any JIDs, phone numbers, or @tags. Ensure it is captivating so group members are excited and curious to read it.
+
+Please output the response exactly in this JSON format (ALL fields must be non-empty):
 {
   "productive": {
-    "jid": "user_jid_here or empty string if not found",
-    "name": "user_name_here",
-    "reason": "explanation of why they were chosen or 'No outstanding productive technical discussions today.'"
+    "jid": "user_jid_here (REQUIRED — pick someone)",
+    "name": "user_display_name",
+    "reason": "brief explanation of their contribution"
   },
   "annoying": {
-    "topic": "topic name or 'Not found today'",
-    "jid": "user_jid_here or empty string if not found",
-    "name": "user_name_here",
-    "reason": "explanation of why this topic/person was annoying"
+    "topic": "topic name (REQUIRED — pick something)",
+    "jid": "user_jid_here (REQUIRED — pick someone)",
+    "name": "user_display_name",
+    "reason": "humorous/sarcastic explanation"
   },
   "summary": [
-    "Savage/funny story point 1",
-    "Savage/funny story point 2"
+    "Engaging story point 1 (REQUIRED — minimum 3 points)",
+    "Engaging story point 2",
+    "Engaging story point 3"
   ]
 }
 `;
@@ -147,13 +153,12 @@ Please output the response exactly in this JSON format:
       throw lastError || new Error('All Gemini models failed');
     }
 
-
     console.log('[Analytics] Gemini raw response:', aiResponseText);
 
     // 6. Parse result
     let result = {
-      productive: { jid: '', name: '', reason: 'Not found today' },
-      annoying: { topic: 'Not found today', jid: '', name: '', reason: '' },
+      productive: { jid: '', name: '', reason: '' },
+      annoying: { topic: '', jid: '', name: '', reason: '' },
       summary: [] as string[]
     };
 
@@ -165,8 +170,50 @@ Please output the response exactly in this JSON format:
       if (match) {
         try {
           result = JSON.parse(match[0]);
-        } catch (_) {}
+        } catch (_) {
+          console.error('[Analytics] Regex JSON extraction also failed. Raw text:', aiResponseText.substring(0, 500));
+        }
       }
+    }
+
+    // 6b. Validate & log what Gemini returned — detect empty/default responses
+    const hasProductivePerson = !!(result.productive?.jid && result.productive.jid.length > 5);
+    const hasAnnoyingTopic = !!(result.annoying?.topic && result.annoying.topic !== 'Not found today' && result.annoying.topic.length > 0);
+    const hasSummary = !!(result.summary && Array.isArray(result.summary) && result.summary.length > 0);
+
+    console.log(`[Analytics] Parsed result quality — MVP: ${hasProductivePerson}, Annoying: ${hasAnnoyingTopic}, Summary: ${hasSummary} (${result.summary?.length || 0} points)`);
+
+    // 6c. Generate fallback content from raw message data if Gemini returned empty fields
+    if (!hasSummary) {
+      console.warn('[Analytics] Gemini returned empty summary — generating fallback from message data.');
+      // Build a basic summary from message activity
+      const sortedSenders = Object.entries(senderCounts)
+        .sort(([, a], [, b]) => b.count - a.count)
+        .slice(0, 5);
+
+      const fallbackPoints: string[] = [];
+      fallbackPoints.push(`Today saw ${messages.length} messages from ${Object.keys(senderCounts).length} participants.`);
+
+      if (sortedSenders.length >= 2) {
+        fallbackPoints.push(`${sortedSenders[0][1].name} dominated the chat with ${sortedSenders[0][1].count} messages, while ${sortedSenders[1][1].name} followed with ${sortedSenders[1][1].count}.`);
+      }
+
+      // Find the quietest active participant
+      const quietest = sortedSenders[sortedSenders.length - 1];
+      if (quietest && sortedSenders.length > 2) {
+        fallbackPoints.push(`${quietest[1].name} played it cool with just ${quietest[1].count} messages — quality over quantity, perhaps?`);
+      }
+
+      result.summary = fallbackPoints;
+    }
+
+    if (!hasProductivePerson && mostMessagedJid) {
+      console.warn('[Analytics] Gemini returned no MVP — falling back to most active sender.');
+      result.productive = {
+        jid: mostMessagedJid,
+        name: senderCounts[mostMessagedJid]?.name || 'Unknown',
+        reason: `Most active participant with ${maxCount} messages — keeping the group alive counts as value!`
+      };
     }
 
     // 7. Format output report message
@@ -202,16 +249,17 @@ Please output the response exactly in this JSON format:
       storySummary = '🔹 _No notable stories today._';
     }
 
+    const participantCount = Object.keys(senderCounts).length;
     const reportMessage = `📊 *Daily Group Analytics (Past 24 Hours)* 📊
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🏆 *Most Productive Person (Technical Q&A/Help):*
+🏆 *Today's MVP:*
 👉 ${productiveLine}
 
 📈 *Most Active Today:*
-👉 ${mostMessagedTag} (${maxCount} messages)
+👉 ${mostMessagedTag} (${maxCount} messages out of ${messages.length} total from ${participantCount} participants)
 
-🙄 *Most Annoying Topic:*
+🙄 *Most Overblown Topic:*
 👉 ${annoyingLine}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━

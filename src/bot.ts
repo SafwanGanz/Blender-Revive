@@ -16,6 +16,15 @@ import path from 'path';
 
 dotenv.config();
 
+// Suppress noisy "Closing session" dumps from libsignal's session_record.js.
+// libsignal uses console.info to log entire SessionEntry objects on every session close,
+// flooding the terminal with hundreds of lines of binary buffer data.
+const originalConsoleInfo = console.info;
+console.info = (...args: any[]) => {
+  if (typeof args[0] === 'string' && args[0].startsWith('Closing session')) return;
+  originalConsoleInfo.apply(console, args);
+};
+
 // Initialize the pino logger for Baileys.
 // Changing log level to 'warn' to hide verbose protocol frames and decrypt retries, 
 // leaving only critical connection statuses and warnings.
@@ -209,7 +218,10 @@ export async function startWhatsAppBot(): Promise<any> {
       }
       if (promises.length > 0) {
         await Promise.all(promises);
-        console.log(`[Bot] Bulk mapped ${mapOps.length} contacts and processed ${referralOps.length} username updates.`);
+        // Only log when actual LID mappings were written (skip no-op contact syncs)
+        if (mapOps.length > 0) {
+          console.log(`[Bot] Mapped ${mapOps.length} LID→Phone contacts, updated ${referralOps.length} usernames.`);
+        }
       }
     } catch (err) {
       console.error('[Bot] Bulk contact write failed:', err);
@@ -217,7 +229,6 @@ export async function startWhatsAppBot(): Promise<any> {
   };
 
   sock.ev.on('contacts.upsert', async (contacts: any[]) => {
-    console.log(`[Bot] Contacts upsert: ${contacts.length} contacts received, scanning for LID mappings...`);
     await captureContactMappings(contacts);
   });
 
@@ -288,10 +299,9 @@ export async function startWhatsAppBot(): Promise<any> {
               const batch = lids.slice(i, i + 10);
               try {
                 await sock.issuePrivacyTokens(batch);
-                console.log(`[Bot] Issued privacy tokens batch ${Math.floor(i/10) + 1}/${Math.ceil(lids.length/10)}`);
               } catch (batchErr: any) {
                 if (!isConnected) return;
-                console.warn(`[Bot] Privacy token batch ${Math.floor(i/10) + 1} failed:`, batchErr?.message || batchErr);
+                // Silently skip failed batches — non-critical operation
               }
               // Small delay between batches
               await new Promise(r => setTimeout(r, 500));

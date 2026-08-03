@@ -48,10 +48,10 @@ const COMPANY_ALIASES: Record<string, string[]> = {
   'HCLTECH': ['HCL_Technologies'],
   'TECHM': ['Tech_Mahindra'],
   'TECH_M': ['Tech_Mahindra'],
-  'LTI': ['LTIMindtree'],
-  'LTIM': ['LTIMindtree'],
-  'LTIMINDTREE': ['LTIMindtree'],
-  'MINDTREE': ['LTIMindtree'],
+  'LTI': ['LTI_Mindtree', 'LTIMindtree'],
+  'LTIM': ['LTI_Mindtree', 'LTIMindtree'],
+  'LTIMINDTREE': ['LTI_Mindtree', 'LTIMindtree'],
+  'MINDTREE': ['LTI_Mindtree', 'LTIMindtree'],
   'MPHASIS': ['Mphasis'],
   'COFORGE': ['Coforge'],
   'NIIT': ['NIIT_Technologies'],
@@ -174,9 +174,16 @@ export async function resolveCompanySanity(rawName: string): Promise<{ matched: 
   const aliasCandidates = COMPANY_ALIASES[aliasKey];
   if (aliasCandidates && aliasCandidates.length > 0) {
     // Try each alias candidate against the DB — return the first that has registered users
+    // Also try space/underscore variants since DB entries may store either form
     for (const candidate of aliasCandidates) {
+      const candidateSpace = candidate.replace(/_/g, ' ');
+      const candidateUnderscore = candidate.replace(/\s+/g, '_');
       const aliasMatch = await referralsCollection.findOne({
-        company: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, 'i') },
+        $or: [
+          { company: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, 'i') } },
+          { company: { $regex: new RegExp(`^${escapeRegex(candidateSpace)}$`, 'i') } },
+          { company: { $regex: new RegExp(`^${escapeRegex(candidateUnderscore)}$`, 'i') } }
+        ],
         deletedAt: { $exists: false }
       } as any);
       if (aliasMatch) {

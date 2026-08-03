@@ -228,6 +228,37 @@ export async function startWhatsAppBot(): Promise<any> {
     }
   };
 
+  /**
+   * Captures group names (subjects) to the `groups` collection so the KPI
+   * dashboard can display readable group names instead of raw JID hashes.
+   */
+  const captureGroupNames = async (groups: Record<string, any>): Promise<void> => {
+    try {
+      const db = getDb();
+      const groupsCollection = db.collection('groups');
+      const ops: any[] = [];
+
+      for (const [gid, group] of Object.entries(groups)) {
+        const name = group.subject;
+        if (!name) continue;
+        ops.push({
+          updateOne: {
+            filter: { _id: gid },
+            update: { $set: { name, updatedAt: new Date() } },
+            upsert: true,
+          },
+        });
+      }
+
+      if (ops.length > 0) {
+        await groupsCollection.bulkWrite(ops, { ordered: false });
+        console.log(`[Bot] Captured ${ops.length} group names.`);
+      }
+    } catch (err) {
+      console.error('[Bot] Failed to capture group names:', err);
+    }
+  };
+
   sock.ev.on('contacts.upsert', async (contacts: any[]) => {
     await captureContactMappings(contacts);
   });
@@ -324,6 +355,9 @@ export async function startWhatsAppBot(): Promise<any> {
           const groups = await sock.groupFetchAllParticipating();
           if (!isConnected) return;
           const groupIds = Object.keys(groups);
+
+          // Capture group names (subjects) for KPI dashboard display
+          await captureGroupNames(groups);
 
           for (const gid of groupIds) {
             if (!isConnected) {

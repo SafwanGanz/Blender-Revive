@@ -614,17 +614,33 @@ export const companyCommand: Command = {
     text += `━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     const allMentions: string[] = [];
+    const isGroupChat = jid.endsWith('@g.us');
+
     for (const record of records) {
       const resolvedPhone = resolvePhoneForRecord(record);
       const formatted = formatUser(record._id, record.username, jid, record.phoneJid, resolvedPhone);
-      text += `👤 ${formatted.text}\n`;
-      if (formatted.mentions.length > 0) {
-        allMentions.push(...formatted.mentions);
+
+      if (isGroupChat) {
+        // In groups: show just the username — no user tags, no mention pings.
+        const name = record.username && record.username !== 'Unknown'
+          ? record.username
+          : `User ${record._id.split('@')[0].slice(-4)}`;
+        text += `👤 ${name}\n`;
+      } else {
+        // In DMs: show the clickable @tag so the user can tap & DM directly.
+        text += `👤 ${formatted.text}\n`;
+        if (formatted.mentions.length > 0) {
+          allMentions.push(...formatted.mentions);
+        }
       }
     }
 
     text += `\n━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     text += `📊 *Total:* ${records.length} ${records.length === 1 ? 'user' : 'users'}`;
+
+    if (isGroupChat) {
+      text += `\n\n💡 _Pssst — want their tap-to-DM tag / number directly? Try running this same command in my DM, and I'll hand you the clickable @tags & numbers right there._`;
+    }
 
     await sendHumanLikeResponse(
       sock,

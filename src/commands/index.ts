@@ -362,8 +362,12 @@ export async function handleIncomingMessage(sock: any, msg: proto.IWebMessageInf
 
   console.log(`[Command] Found and executing: ${prefix}${commandName} from ${msg.pushName || 'User'} in chat ${jid}`);
 
+  const startedAt = Date.now();
+
   try {
     await command.execute(sock, msg, args);
+    // Log successful command usage for KPI analytics (non-blocking, fire-and-forget)
+    logCommandUsage(commandName, msg, Date.now() - startedAt);
   } catch (error) {
     console.error(`[Command] Failed to execute ${commandName}:`, error);
     
@@ -374,6 +378,34 @@ export async function handleIncomingMessage(sock: any, msg: proto.IWebMessageInf
       { text: `❌ *Error executing command:* ${(error as Error).message}` },
       { quoted: msg }
     );
+  }
+}
+
+/**
+ * Logs command usage to the `command_usage` collection for KPI dashboard analytics.
+ * Fire-and-forget: intentionally non-blocking so a logging failure never delays
+ * the bot's command response.
+ */
+async function logCommandUsage(commandName: string, msg: proto.IWebMessageInfo, responseTimeMs: number): Promise<void> {
+  try {
+    const { getDb } = await import('../db/mongodb');
+    const db = getDb();
+    const collection = db.collection('command_usage');
+
+    const jid = msg.key.remoteJid || '';
+    const senderJid = msg.key.participant || jid;
+
+    await collection.insertOne({
+      commandName,
+      userId: senderJid,
+      userName: msg.pushName || 'Unknown',
+      groupId: jid.endsWith('@g.us') ? jid : null,
+      chatType: jid.endsWith('@g.us') ? 'group' : 'dm',
+      responseTimeMs,
+      timestamp: new Date(),
+    });
+  } catch (err) {
+    // Swallow logging errors — analytics should never break the bot
   }
 }
 

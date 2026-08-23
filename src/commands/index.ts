@@ -289,6 +289,14 @@ export async function handleIncomingMessage(sock: any, msg: proto.IWebMessageInf
   // Ignore messages sent by the bot itself to prevent infinite loops
   if (msg.key.fromMe) return;
 
+  // Spam protection check (runs before command parsing so stickers/duplicates are caught)
+  try {
+    const spamResult = await checkSpam(sock, msg);
+    if (spamResult === 'kicked') return;
+  } catch (err) {
+    console.error('[SpamProtection] Error during spam check:', err);
+  }
+
   const isDm = !jid.endsWith('@g.us');
 
   const text = getMessageText(msg).trim();
@@ -426,7 +434,7 @@ import {
   analyticsCommand
 } from './referral';
 import { devCommand } from './dev';
-import { warnCommand, unwarnCommand, checkWarnCommand } from './warn';
+import { warnCommand, unwarnCommand, checkWarnCommand, spamCommand, checkSpam } from './warn';
 
 registerCommand(pingCommand);
 registerCommand(helpCommand);
@@ -445,4 +453,5 @@ registerCommand(devCommand);
 registerCommand(warnCommand);
 registerCommand(unwarnCommand);
 registerCommand(checkWarnCommand);
+registerCommand(spamCommand);
 

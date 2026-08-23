@@ -2,7 +2,7 @@ import { proto } from '@whiskeysockets/baileys';
 import { Command, sendHumanLikeResponse, isSenderDev, isSenderGroupAdmin } from './index';
 import { getDb } from '../db/mongodb';
 import { resolvePhoneFromLid } from '../db/lid-phone-map';
-
+import { isSocketConnected } from '../bot';
 const prefix = process.env.BOT_PREFIX || '/';
 
 /**
@@ -116,10 +116,10 @@ export const warnCommand: Command = {
     const botJid = sock.user?.id ? cleanUserJid(sock.user.id) : '';
     const envBotNumber = process.env.BOT_NUMBER || '';
     const cleanEnvBotNumber = envBotNumber.replace(/\D/g, '');
-    const isBot = targetJid === botJid || 
-                  (cleanEnvBotNumber && targetJid.split('@')[0] === cleanEnvBotNumber) ||
-                  (targetPhone && (targetPhone === botJid || targetPhone.split('@')[0] === cleanEnvBotNumber)) ||
-                  (targetLid && (targetLid === botJid));
+    const isBot = targetJid === botJid ||
+      (cleanEnvBotNumber && targetJid.split('@')[0] === cleanEnvBotNumber) ||
+      (targetPhone && (targetPhone === botJid || targetPhone.split('@')[0] === cleanEnvBotNumber)) ||
+      (targetLid && (targetLid === botJid));
 
     if (isBot) {
       await sendHumanLikeResponse(
@@ -132,9 +132,9 @@ export const warnCommand: Command = {
     }
 
     // 5. Validate if target is the sender
-    const isSelf = targetJid === senderJid || 
-                   (targetPhone && targetPhone === senderJid) || 
-                   (targetLid && targetLid === senderJid);
+    const isSelf = targetJid === senderJid ||
+      (targetPhone && targetPhone === senderJid) ||
+      (targetLid && targetLid === senderJid);
     if (isSelf) {
       await sendHumanLikeResponse(
         sock,
@@ -167,8 +167,8 @@ export const warnCommand: Command = {
       const pJidClean = p.jid ? cleanUserJid(p.jid) : null;
 
       return pIdClean === targetJid ||
-             (targetPhone && (pIdClean === targetPhone || pLidClean === targetPhone || pJidClean === targetPhone)) ||
-             (targetLid && (pIdClean === targetLid || pLidClean === targetLid || pJidClean === targetLid));
+        (targetPhone && (pIdClean === targetPhone || pLidClean === targetPhone || pJidClean === targetPhone)) ||
+        (targetLid && (pIdClean === targetLid || pLidClean === targetLid || pJidClean === targetLid));
     });
 
     // If the target is not in the group, we can't warn/remove them
@@ -243,7 +243,7 @@ export const warnCommand: Command = {
       // Try to remove user from the group using their exact group participant ID
       try {
         await sock.groupParticipantsUpdate(jid, [targetParticipant.id], 'remove');
-        
+
         await sendHumanLikeResponse(
           sock,
           jid,
@@ -560,4 +560,197 @@ export const checkWarnCommand: Command = {
       { quoted: msg }
     );
   },
+};
+
+// SPAM PROTECTION
+
+const SPAM_SETTINGS_COL = 'spam_settings';
+const STICKER_VIOLATIONS_COL = 'spam_sticker_violations';
+const STICKER_LIMIT = parseInt(process.env.STICKER_SPAM_LIMIT || '3', 10);
+const STICKER_VIOLATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+export async function getSpamEnabled(groupId: string): Promise<boolean> {
+  try {
+    const doc = await getDb().collection(SPAM_SETTINGS_COL).findOne({ _id: groupId } as any);
+    return doc?.enabled ?? false;
+  } catch {
+    return false;
+  }
+}
+
+export async function setSpamEnabled(groupId: string, enabled: boolean): Promise<void> {
+  await getDb().collection(SPAM_SETTINGS_COL).updateOne(
+    { _id: groupId } as any,
+    {
+      $set: { enabled, updatedAt: new Date() },
+      $setOnInsert: { createdAt: new Date() }
+    },
+    { upsert: true }
+  );
+}
+
+async function getUserViolationQuery(userId: string): Promise<any[]> {
+  const cleanedUserId = cleanUserJid(userId);
+  const queries: any[] = [{ userId: cleanedUserId }];
+
+  try {
+    const mapCol = getDb().collection('lid_phone_map');
+    if (cleanedUserId.endsWith('@lid')) {
+      const mapping = await mapCol.findOne({ _id: cleanedUserId } as any);
+      if (mapping?.phoneJid) queries.push({ userId: mapping.phoneJid });
+    } else if (cleanedUserId.endsWith('@s.whatsapp.net')) {
+      const mapping = await mapCol.findOne({ phoneJid: cleanedUserId } as any);
+      if (mapping?._id) queries.push({ userId: String(mapping._id) });
+    }
+  } catch {
+    // ignore
+  }
+
+  return queries;
+}
+
+async function incrementStickerViolation(groupId: string, userId: string): Promise<number> {
+  const userQueries = await getUserViolationQuery(userId);
+  const col = getDb().collection(STICKER_VIOLATIONS_COL);
+  const filter = { groupId, $or: userQueries };
+
+  const doc = await col.findOne(filter);
+
+  if (doc) {
+    await col.updateOne(
+      { _id: doc._id },
+      { $inc: { count: 1 }, $set: { lastViolationAt: new Date() } }
+    );
+    return (doc.count || 0) + 1;
+  }
+
+  const cleanedUserId = cleanUserJid(userId);
+  await col.insertOne({
+    groupId,
+    userId: cleanedUserId,
+    count: 1,
+    lastViolationAt: new Date(),
+    createdAt: new Date()
+  });
+
+  return 1;
+}
+
+async function resetStickerViolations(groupId: string, userId: string): Promise<void> {
+  const userQueries = await getUserViolationQuery(userId);
+  await getDb().collection(STICKER_VIOLATIONS_COL).deleteMany({
+    groupId,
+    $or: userQueries
+  });
+}
+
+async function kickUserForSpam(sock: any, groupId: string, userId: string, reason: string): Promise<void> {
+  try {
+    const metadata = await sock.groupMetadata(groupId);
+    const canonicalUserId = cleanUserJid(userId);
+
+    const participant = metadata.participants.find((p: any) => {
+      const pId = cleanUserJid(p.id);
+      const pLid = p.lid ? cleanUserJid(p.lid) : null;
+      const pJid = p.jid ? cleanUserJid(p.jid) : null;
+
+      return pId === canonicalUserId ||
+        (pLid && pLid === canonicalUserId) ||
+        (pJid && pJid === canonicalUserId);
+    });
+
+    if (!participant) return;
+
+    await sock.groupParticipantsUpdate(groupId, [participant.id], 'remove');
+
+    await sendHumanLikeResponse(sock, groupId, {
+      text: `🚫 *Auto-Kicked for Spam*\n\nUser @${canonicalUserId.split('@')[0]} has been removed from the group.\n*Reason:* ${reason}`,
+      mentions: [canonicalUserId]
+    });
+  } catch (err) {
+    console.error('[SpamProtection] Failed to kick user:', err);
+  }
+}
+
+export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
+  const jid = msg.key.remoteJid!;
+  if (!jid.endsWith('@g.us')) return null;
+
+  const enabled = await getSpamEnabled(jid);
+  if (!enabled) return null;
+
+  const message = msg.message as any;
+  if (!message?.stickerMessage) return null;
+
+  const senderJid = cleanUserJid(msg.key.participant || msg.key.remoteJid!);
+
+  // Every sticker counts as one violation
+  const violationCount = await incrementStickerViolation(jid, senderJid);
+
+  if (violationCount >= STICKER_LIMIT) {
+    await sendHumanLikeResponse(sock, jid, {
+      text: `🚨 @${senderJid.split('@')[0]} FINAL WARNING ${STICKER_LIMIT}/${STICKER_LIMIT} — You have been warned ${STICKER_LIMIT} times for sticker spam. You are being removed from the group.`,
+      mentions: [senderJid]
+    }, { quoted: msg });
+
+    setTimeout(async () => {
+      if (!isSocketConnected()) return;
+      try {
+        await kickUserForSpam(sock, jid, senderJid, `Reached ${STICKER_LIMIT}/${STICKER_LIMIT} sticker spam violations`);
+      } catch {
+        // ignore
+      }
+    }, 1000);
+
+    await resetStickerViolations(jid, senderJid);
+    return 'kicked';
+  }
+
+  await sendHumanLikeResponse(sock, jid, {
+    text: `⚠️ *Sticker Spam Warning ${violationCount}/${STICKER_LIMIT}* @${senderJid.split('@')[0]}\n\nPlease stop sending stickers. You will be removed from the group on your ${STICKER_LIMIT}th warning.`,
+    mentions: [senderJid]
+  }, { quoted: msg });
+
+  return 'warned';
+}
+
+export async function checkSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
+  return await checkStickerSpam(sock, msg);
+}
+
+export const spamCommand: Command = {
+  name: 'spam',
+  aliases: ['antispam', 'spamprotection'],
+  description: 'Admin: Toggle automatic spam protection on/off.',
+  execute: async (sock, msg, args) => {
+    const jid = msg.key.remoteJid!;
+
+    if (!jid.endsWith('@g.us')) {
+      await sendHumanLikeResponse(sock, jid, { text: '❌ This command can only be used in groups.' }, { quoted: msg });
+      return;
+    }
+
+    const isAdmin = await isSenderGroupAdmin(sock, msg);
+    if (!isAdmin) {
+      await sendHumanLikeResponse(sock, jid, { text: '❌ Only group admins can manage spam protection.' }, { quoted: msg });
+      return;
+    }
+
+    const action = args[0]?.toLowerCase();
+
+    if (action === 'on') {
+      await setSpamEnabled(jid, true);
+      await sendHumanLikeResponse(sock, jid, {
+        text: `✅ *Spam protection ENABLED.*\n\n• Stickers: each sticker sent counts as a warning\n  Warning 1/${STICKER_LIMIT} → ... → Warning ${STICKER_LIMIT}/${STICKER_LIMIT} + kick`
+      }, { quoted: msg });
+    } else if (action === 'off') {
+      await setSpamEnabled(jid, false);
+      await sendHumanLikeResponse(sock, jid, { text: '❌ *Spam protection DISABLED.*' }, { quoted: msg });
+    } else {
+      const enabled = await getSpamEnabled(jid);
+      await sendHumanLikeResponse(sock, jid, {
+        text: `🛡️ *Spam Protection:* ${enabled ? 'ENABLED ✅' : 'DISABLED ❌'}\n\nUse \`${prefix}spam on\` or \`${prefix}spam off\` to toggle.`
+      }, { quoted: msg });
+    }
+  }
 };

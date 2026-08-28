@@ -717,23 +717,6 @@ async function applyStickerViolation(sock: any, jid: string, senderJid: string, 
   return 'warned';
 }
 
-// Group admins can pull a message for everyone. Used to yank the sticker
-// once the grace window lapses and the sender didn't delete it themselves.
-async function deleteMessageForEveryone(sock: any, jid: string, senderJid: string, msg: proto.IWebMessageInfo): Promise<void> {
-  try {
-    await sock.sendMessage(jid, {
-      delete: {
-        remoteJid: jid,
-        fromMe: false,
-        id: msg.key.id!,
-        participant: senderJid,
-      } as any,
-    });
-  } catch (err) {
-    console.error('[SpamProtection] Failed to delete sticker:', err);
-  }
-}
-
 export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
   const jid = msg.key.remoteJid!;
   if (!jid.endsWith('@g.us')) return null;
@@ -764,8 +747,6 @@ export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): P
     const liveSock = getSocket();
     if (!liveSock || !isSocketConnected()) return;
 
-    // Pull the sticker for everyone, then hand out the warning.
-    await deleteMessageForEveryone(liveSock, jid, senderJid, msg);
     await applyStickerViolation(liveSock, jid, senderJid, msg);
   }, STICKER_GRACE_MS);
 

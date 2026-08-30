@@ -2,7 +2,7 @@ import { proto } from '@whiskeysockets/baileys';
 import { Command, sendHumanLikeResponse, isSenderDev, isSenderGroupAdmin } from './index';
 import { getDb } from '../db/mongodb';
 import { resolvePhoneFromLid } from '../db/lid-phone-map';
-import { isSocketConnected } from '../bot';
+import { isSocketConnected, getSocket } from '../bot';
 const prefix = process.env.BOT_PREFIX || '/';
 
 /**
@@ -672,19 +672,22 @@ async function kickUserForSpam(sock: any, groupId: string, userId: string, reaso
   }
 }
 
-export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
-  const jid = msg.key.remoteJid!;
-  if (!jid.endsWith('@g.us')) return null;
+// How long a sender gets to delete a sticker before it counts as a violation.
+const STICKER_GRACE_SECONDS = parseInt(process.env.STICKER_GRACE_SECONDS || '30', 10);
+const STICKER_GRACE_MS = STICKER_GRACE_SECONDS * 1000;
 
-  const enabled = await getSpamEnabled(jid);
-  if (!enabled) return null;
+interface PendingSticker {
+  timer: NodeJS.Timeout;
+  jid: string;
+  senderJid: string;
+  msg: proto.IWebMessageInfo;
+}
+const pendingStickers = new Map<string, PendingSticker>();
 
-  const message = msg.message as any;
-  if (!message?.stickerMessage) return null;
+const pendingKey = (jid: string, id: string) => `${jid}:${id}`;
 
-  const senderJid = cleanUserJid(msg.key.participant || msg.key.remoteJid!);
-
-  // Every sticker counts as one violation
+// Records one confirmed sticker violation and hands out the warning (or the boot).
+async function applyStickerViolation(sock: any, jid: string, senderJid: string, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned'> {
   const violationCount = await incrementStickerViolation(jid, senderJid);
 
   if (violationCount >= STICKER_LIMIT) {
@@ -714,7 +717,68 @@ export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): P
   return 'warned';
 }
 
+export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
+  const jid = msg.key.remoteJid!;
+  if (!jid.endsWith('@g.us')) return null;
+
+  const enabled = await getSpamEnabled(jid);
+  if (!enabled) return null;
+
+  const message = msg.message as any;
+  if (!message?.stickerMessage) return null;
+
+  const senderJid = cleanUserJid(msg.key.participant || msg.key.remoteJid!);
+  const pkey = pendingKey(jid, msg.key.id!);
+
+  // Same sticker event can arrive more than once — don't stack timers.
+  if (pendingStickers.has(pkey)) return null;
+
+  await sendHumanLikeResponse(sock, jid, {
+    text: `🕐 @${senderJid.split('@')[0]} sticker spotted, delete it within 30s or you'll catch a spam warning.`,
+    mentions: [senderJid]
+  }, { quoted: msg });
+
+  const timer = setTimeout(async () => {
+    pendingStickers.delete(pkey);
+
+    // Admin may have switched protection off while the timer was running.
+    if (!(await getSpamEnabled(jid))) return;
+
+    const liveSock = getSocket();
+    if (!liveSock || !isSocketConnected()) return;
+
+    await applyStickerViolation(liveSock, jid, senderJid, msg);
+  }, STICKER_GRACE_MS);
+
+  pendingStickers.set(pkey, { timer, jid, senderJid, msg });
+  return null;
+}
+
+// If the sender deletes the sticker for everyone before the grace window ends,
+// drop the pending timer so no warning is issued.
+export function handleStickerRevoke(sock: any, msg: proto.IWebMessageInfo): void {
+  const origKey = (msg.message as any)?.protocolMessage?.key;
+  if (!origKey?.id || !origKey?.remoteJid) return;
+
+  const pkey = pendingKey(origKey.remoteJid, origKey.id);
+  const pending = pendingStickers.get(pkey);
+  if (!pending) return;
+
+  clearTimeout(pending.timer);
+  pendingStickers.delete(pkey);
+
+  sendHumanLikeResponse(sock, pending.jid, {
+    text: `✅ @${pending.senderJid.split('@')[0]} deleted it in time, no warning this round.`,
+    mentions: [pending.senderJid]
+  }, { quoted: msg }).catch(() => { });
+}
+
 export async function checkSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
+  const proto = (msg.message as any)?.protocolMessage;
+  if (proto?.type === 'REVOKE') {
+    handleStickerRevoke(sock, msg);
+    return null;
+  }
   return await checkStickerSpam(sock, msg);
 }
 

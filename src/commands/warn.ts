@@ -219,7 +219,7 @@ export const warnCommand: Command = {
       warningsCollection.createIndex(
         { createdAt: 1 },
         { expireAfterSeconds: WARN_EXPIRE_DAYS * 24 * 60 * 60, name: 'warning_ttl' }
-      ).catch(() => {});
+      ).catch(() => { });
     }
 
     // Build the query to check any potential representation of the target user
@@ -441,7 +441,7 @@ export const unwarnCommand: Command = {
         sock,
         jid,
         {
-          text: `✅ *Removed last warning for @${canonicalTargetJid.split('@')[0]}*.\nRemaining warnings: *${newCount}/3*`,
+          text: `✅ *Removed last warning for @${canonicalTargetJid.split('@')[0]}.* \nRemaining warnings: *${newCount}/3*`,
           mentions: [canonicalTargetJid]
         },
         { quoted: msg }

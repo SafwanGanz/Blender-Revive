@@ -1,8 +1,8 @@
 import { proto } from '@whiskeysockets/baileys';
-import { Command, sendHumanLikeResponse, isSenderDev, isSenderGroupAdmin } from './index';
+import { Command, sendHumanLikeResponse, isSenderGroupAdmin } from './index';
 import { getDb } from '../db/mongodb';
 import { resolvePhoneFromLid } from '../db/lid-phone-map';
-import { getStickerViolationCount, STICKER_LIMIT } from './spam';
+import { getStickerViolationCount, isBlacklisted, STICKER_LIMIT } from './spam';
 const prefix = process.env.BOT_PREFIX || '/';
 const WARN_EXPIRE_DAYS = parseInt(process.env.WARN_EXPIRE_DAYS || '30', 10);
 let warnTtlIndexReady = false;
@@ -39,14 +39,13 @@ export const warnCommand: Command = {
       return;
     }
 
-    // 2. Authorisation: developer OR group admin
-    const isDev = await isSenderDev(sock, msg);
-    const isAdmin = !isDev ? await isSenderGroupAdmin(sock, msg) : false;
-    if (!isDev && !isAdmin) {
+    // 2. Authorisation: group admin only
+    const isAdmin = await isSenderGroupAdmin(sock, msg);
+    if (!isAdmin) {
       await sendHumanLikeResponse(
         sock,
         jid,
-        { text: '❌ *Access Denied:* Only group admins (or the developer) can warn members.' },
+        { text: '❌ *Access Denied:* Only group admins can warn members.' },
         { quoted: msg }
       );
       return;
@@ -541,8 +540,9 @@ export const checkWarnCommand: Command = {
     const isSelf = targetJid === cleanUserJid(msg.key.participant || msg.key.remoteJid!);
 
     const stickerCount = await getStickerViolationCount(jid, targetJid);
+    const blacklisted = await isBlacklisted(jid, targetJid);
 
-    if (count === 0 && stickerCount === 0) {
+    if (count === 0 && stickerCount === 0 && !blacklisted) {
       await sendHumanLikeResponse(
         sock,
         jid,
@@ -565,6 +565,10 @@ export const checkWarnCommand: Command = {
     }
 
     text += `\n🏷️ *Sticker warnings:* ${stickerCount}/${STICKER_LIMIT}\n`;
+
+    if (blacklisted) {
+      text += `\n🚫 *Blacklisted for sticker spam.*\nAn admin can remove them with \`\`\`${prefix}rm-blacklist @${canonicalTargetJid.split('@')[0]}\`\`\`\n`;
+    }
 
     await sendHumanLikeResponse(
       sock,

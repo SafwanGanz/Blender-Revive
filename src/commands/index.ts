@@ -435,7 +435,7 @@ import {
 } from './referral';
 import { devCommand } from './dev';
 import { warnCommand, unwarnCommand, checkWarnCommand } from './warn';
-import { spamCommand, rmWarnCommand, checkSpam } from './spam';
+import { spamCommand, rmWarnCommand, rmBlacklistCommand, checkSpam } from './spam';
 
 registerCommand(pingCommand);
 registerCommand(helpCommand);
@@ -455,5 +455,6 @@ registerCommand(warnCommand);
 registerCommand(unwarnCommand);
 registerCommand(checkWarnCommand);
 registerCommand(rmWarnCommand);
+registerCommand(rmBlacklistCommand);
 registerCommand(spamCommand);
 

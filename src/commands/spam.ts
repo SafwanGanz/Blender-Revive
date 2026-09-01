@@ -64,7 +64,7 @@ async function incrementStickerViolation(groupId: string, userId: string): Promi
     col.createIndex(
       { lastViolationAt: 1 },
       { expireAfterSeconds: WARN_EXPIRE_DAYS * 24 * 60 * 60, name: 'sticker_violation_ttl' }
-    ).catch(() => {});
+    ).catch(() => { });
   }
 
   const filter = { groupId, $or: userQueries };
@@ -136,16 +136,36 @@ async function kickUserForSpam(sock: any, groupId: string, userId: string, reaso
 // How long a sender gets to delete a sticker before it counts as a violation.
 const STICKER_GRACE_SECONDS = parseInt(process.env.STICKER_GRACE_SECONDS || '30', 10);
 const STICKER_GRACE_MS = STICKER_GRACE_SECONDS * 1000;
+const STICKER_BURST_KICK_LIMIT = parseInt(process.env.STICKER_BURST_LIMIT || '3', 10);
+const BLACKLIST_COL = 'spam_blacklist';
 
-interface PendingSticker {
+interface PendingBurst {
   timer: NodeJS.Timeout;
   jid: string;
   senderJid: string;
   msg: proto.IWebMessageInfo;
+  count: number;
+  msgIds: Set<string>;
 }
-const pendingStickers = new Map<string, PendingSticker>();
+const pendingBursts = new Map<string, PendingBurst>();
+const burstKey = (jid: string, sender: string) => `${jid}:${sender}`;
 
-const pendingKey = (jid: string, id: string) => `${jid}:${id}`;
+async function addToBlacklist(groupId: string, userId: string): Promise<void> {
+  try {
+    await getDb().collection(BLACKLIST_COL).updateOne(
+      { groupId, userId: cleanUserJid(userId) } as any,
+      { $set: { groupId, userId: cleanUserJid(userId), reason: 'sticker spam burst', at: new Date() } },
+      { upsert: true }
+    );
+  } catch { /* ignore */ }
+}
+
+export async function isBlacklisted(groupId: string, userId: string): Promise<boolean> {
+  try {
+    const doc = await getDb().collection(BLACKLIST_COL).findOne({ groupId, userId: cleanUserJid(userId) } as any);
+    return !!doc;
+  } catch { return false; }
+}
 
 // Records one confirmed sticker violation and hands out the warning (or the boot).
 async function applyStickerViolation(sock: any, jid: string, senderJid: string, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned'> {
@@ -183,55 +203,100 @@ export async function checkStickerSpam(sock: any, msg: proto.IWebMessageInfo): P
   if (!jid.endsWith('@g.us')) return null;
 
   const enabled = await getSpamEnabled(jid);
+  if (process.env.SPAM_DEBUG) console.log('[SpamProtection] sticker check enabled=', enabled, 'jid=', jid);
   if (!enabled) return null;
 
   const message = msg.message as any;
   if (!message?.stickerMessage) return null;
 
   const senderJid = cleanUserJid(msg.key.participant || msg.key.remoteJid!);
-  const pkey = pendingKey(jid, msg.key.id!);
 
-  // Same sticker event can arrive more than once — don't stack timers.
-  if (pendingStickers.has(pkey)) return null;
+  // Group admins are exempt — don't track or punish their stickers.
+  if (await isSenderGroupAdmin(sock, msg)) return null;
 
-  await sendHumanLikeResponse(sock, jid, {
-    text: `🕐 @${senderJid.split('@')[0]} sticker spotted, delete it within ${STICKER_GRACE_SECONDS}s or you'll catch a spam warning.`,
-    mentions: [senderJid]
-  }, { quoted: msg });
-
-  const timer = setTimeout(async () => {
-    pendingStickers.delete(pkey);
-
-    // Admin may have switched protection off while the timer was running.
-    if (!(await getSpamEnabled(jid))) return;
-
+  // Already blacklisted for sticker spam — boot immediately, no grace.
+  if (await isBlacklisted(jid, senderJid)) {
     const liveSock = getSocket();
-    if (!liveSock || !isSocketConnected()) return;
+    if (liveSock && isSocketConnected()) {
+      await kickUserForSpam(liveSock, jid, senderJid, 'Blacklisted for sticker spam');
+    }
+    return null;
+  }
 
-    await applyStickerViolation(liveSock, jid, senderJid, msg);
-  }, STICKER_GRACE_MS);
+  // Group stickers from the same sender into one burst session.
+  const bkey = burstKey(jid, senderJid);
+  let entry = pendingBursts.get(bkey);
 
-  pendingStickers.set(pkey, { timer, jid, senderJid, msg });
+  // First sticker in the burst — open a single grace window.
+  if (!entry) {
+    entry = { jid, senderJid, msg, count: 0, msgIds: new Set(), timer: null! };
+    entry.timer = setTimeout(async () => {
+      pendingBursts.delete(bkey);
+
+      // Admin may have switched protection off while the timer was running.
+      if (!(await getSpamEnabled(jid))) return;
+
+      const liveSock = getSocket();
+      if (!liveSock || !isSocketConnected()) return;
+
+      if (process.env.SPAM_DEBUG) console.log('[SpamProtection] grace window expired for', senderJid, 'in', jid, '-> applying violation');
+      await applyStickerViolation(liveSock, jid, senderJid, entry.msg);
+    }, STICKER_GRACE_MS);
+    pendingBursts.set(bkey, entry);
+  }
+
+  // Ignore the same sticker delivered more than once (retries / re-ups shouldn't inflate the burst).
+  if (entry.msgIds.has(msg.key.id!)) return null;
+  entry.msgIds.add(msg.key.id!);
+
+  entry.count++;
+
+  // Burst spam: more than the limit in one go — blacklist and kick on the spot.
+  if (entry.count > STICKER_BURST_KICK_LIMIT) {
+    clearTimeout(entry.timer);
+    pendingBursts.delete(bkey);
+    const liveSock = getSocket();
+    if (liveSock && isSocketConnected()) {
+      await addToBlacklist(jid, senderJid);
+      await kickUserForSpam(liveSock, jid, senderJid, `Sticker spam burst (more than ${STICKER_BURST_KICK_LIMIT} stickers at once)`);
+    }
+    return null;
+  }
+
+  // Notify only on the first sticker so we don't flood the chat.
+  if (entry.count === 1) {
+    if (process.env.SPAM_DEBUG) console.log('[SpamProtection] sending grace notice for', senderJid, 'in', jid);
+    await sendHumanLikeResponse(sock, jid, {
+      text: `🕐 @${senderJid.split('@')[0]} sticker spotted, delete it within ${STICKER_GRACE_SECONDS}s or you'll catch a spam warning.`,
+      mentions: [senderJid]
+    }, { quoted: msg });
+  }
+
   return null;
 }
 
-// If the sender deletes the sticker for everyone before the grace window ends,
+// Cancel a pending grace window for a specific sticker (group + message id).
+// Called when a sender deletes the sticker for everyone before the grace period ends,
+// or from the messages.update 'deleted' listener as a secondary signal.
+export function cancelPendingSticker(groupId: string, msgId: string): void {
+  for (const [bkey, entry] of pendingBursts) {
+    if (entry.jid === groupId && entry.msgIds.has(msgId)) {
+      clearTimeout(entry.timer);
+      pendingBursts.delete(bkey);
+      if (process.env.SPAM_DEBUG) {
+        console.log(`[SpamProtection] Grace window cancelled for ${msgId} in ${groupId} (sticker deleted)`);
+      }
+      return;
+    }
+  }
+}
+
+// If the sender deletes a sticker for everyone before the grace window ends,
 // drop the pending timer so no warning is issued.
 export function handleStickerRevoke(sock: any, msg: proto.IWebMessageInfo): void {
   const origKey = (msg.message as any)?.protocolMessage?.key;
   if (!origKey?.id || !origKey?.remoteJid) return;
-
-  const pkey = pendingKey(origKey.remoteJid, origKey.id);
-  const pending = pendingStickers.get(pkey);
-  if (!pending) return;
-
-  clearTimeout(pending.timer);
-  pendingStickers.delete(pkey);
-
-  sendHumanLikeResponse(sock, pending.jid, {
-    text: `✅ @${pending.senderJid.split('@')[0]} deleted it in time, no warning this round.`,
-    mentions: [pending.senderJid]
-  }, { quoted: msg }).catch(() => { });
+  cancelPendingSticker(origKey.remoteJid, origKey.id);
 }
 
 export async function checkSpam(sock: any, msg: proto.IWebMessageInfo): Promise<'kicked' | 'warned' | null> {
@@ -354,6 +419,114 @@ export const rmWarnCommand: Command = {
       jid,
       {
         text: `✅ Sticker warnings cleared for @${targetJid.split('@')[0]}.\nThey're back to 0/${STICKER_LIMIT}.`,
+        mentions: [targetJid]
+      },
+      { quoted: msg }
+    );
+  },
+};
+
+/**
+ * Command: /rm-blacklist <@user | phone | reply>
+ * Admin/Group-admin: removes a member from the sticker-spam blacklist.
+ */
+export const rmBlacklistCommand: Command = {
+  name: 'rm-blacklist',
+  aliases: ['rmblacklist', 'unblacklist', 'removeblacklist', 'whitelist'],
+  description: 'Admin/Group-admin: Removes a member from the sticker-spam blacklist.',
+  execute: async (sock, msg, args) => {
+    const jid = msg.key.remoteJid!;
+
+    if (!jid.endsWith('@g.us')) {
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        { text: '❌ *Error:* This command can only be executed within a group chat.' },
+        { quoted: msg }
+      );
+      return;
+    }
+
+    const isAdmin = await isSenderGroupAdmin(sock, msg);
+    if (!isAdmin) {
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        { text: '❌ *Access Denied:* Only group admins can remove users from the blacklist.' },
+        { quoted: msg }
+      );
+      return;
+    }
+
+    const ctxInfo: any = (msg.message as any)?.extendedTextMessage?.contextInfo
+      || (msg.message as any)?.imageMessage?.contextInfo
+      || (msg.message as any)?.videoMessage?.contextInfo
+      || null;
+
+    let targetJid: string | null = null;
+
+    if (ctxInfo?.participant) {
+      targetJid = ctxInfo.participant;
+    } else if (ctxInfo?.mentionedJid && ctxInfo.mentionedJid.length > 0) {
+      targetJid = ctxInfo.mentionedJid[0];
+    } else if (args.length > 0) {
+      const rawArg = args[0].trim().replace(/^@/, '');
+      const digits = rawArg.replace(/\D/g, '');
+      if (digits.length >= 8 && digits.length <= 15) {
+        targetJid = `${digits}@s.whatsapp.net`;
+      }
+    }
+
+    if (!targetJid) {
+      await sendHumanLikeResponse(
+        sock,
+        jid,
+        {
+          text: `⚠️ *Usage Error:* Mention a user or reply to their message to un-blacklist them.\n\n*Example:*\n- \`${prefix}rm-blacklist @user\``
+        },
+        { quoted: msg }
+      );
+      return;
+    }
+
+    targetJid = cleanUserJid(targetJid);
+
+    let targetPhone: string | null = null;
+    let targetLid: string | null = null;
+
+    if (targetJid.endsWith('@lid')) {
+      targetLid = targetJid;
+    } else if (targetJid.endsWith('@s.whatsapp.net')) {
+      targetPhone = targetJid;
+      try {
+        const db = getDb();
+        const mapping = await db.collection('lid_phone_map').findOne({ phoneJid: targetJid } as any);
+        if (mapping) {
+          targetLid = String(mapping._id);
+        }
+      } catch { /* ignore */ }
+    }
+
+    const db = getDb();
+    const blacklistCol = db.collection(BLACKLIST_COL);
+
+    const userQuery = {
+      $or: [
+        { userId: targetJid },
+        ...(targetPhone ? [{ userId: targetPhone }] : []),
+        ...(targetLid ? [{ userId: targetLid }] : [])
+      ]
+    };
+
+    const result = await blacklistCol.deleteMany({ groupId: jid, ...userQuery } as any);
+
+    await sendHumanLikeResponse(
+      sock,
+      jid,
+      {
+        text: result.deletedCount > 0
+          ? `✅ *Removed @${targetJid.split('@')[0]} from the sticker-spam blacklist.*`
+          : `ℹ️ *@${targetJid.split('@')[0]}* is not on the blacklist.`,
         mentions: [targetJid]
       },
       { quoted: msg }

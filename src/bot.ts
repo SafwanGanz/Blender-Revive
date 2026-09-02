@@ -137,10 +137,27 @@ export async function startWhatsAppBot(): Promise<any> {
 
   sockInstance = sock;
 
-  // 1. Credentials sync event
+   // 1. Credentials sync event
   sock.ev.on('creds.update', async () => {
     await saveCreds();
   });
+
+   // Message status updates (e.g. delete-for-everyone). Secondary signal for
+   // cancelling a pending sticker grace window — the primary signal is the REVOKE
+   // message handled inside checkSpam. Fires on a different tick than the worker.
+   sock.ev.on('messages.update', (updates: Array<{ key: any; update: any }>) => {
+     for (const { key, update } of updates) {
+       try {
+         if (update?.status === 'deleted' && key?.remoteJid?.endsWith('@g.us') && key?.id) {
+           const { cancelPendingSticker } = require('./commands/spam');
+           cancelPendingSticker(key.remoteJid, key.id);
+         }
+       } catch (err) {
+         console.error('[SpamProtection] messages.update handler error:', err);
+       }
+     }
+   });
+
 
   // 1b. Capture LID → Phone JID mappings from WhatsApp's phone number sharing protocol.
   // This fires when WhatsApp reveals the phone number behind a LID.
@@ -456,6 +473,8 @@ export async function startWhatsAppBot(): Promise<any> {
 
           // Import sendHumanLikeResponse dynamically to avoid circular dependencies
           const { sendHumanLikeResponse } = await import('./commands');
+          // isBlacklisted reads the spam blacklist collection
+          const { isBlacklisted } = await import('./commands/spam');
 
           // Bot identification details
           const envBotNumber = process.env.BOT_NUMBER || '';
@@ -464,6 +483,7 @@ export async function startWhatsAppBot(): Promise<any> {
 
           // Collect unregistered participants for a single group welcome
           const unregisteredMentions: { targetJid: string }[] = [];
+          const blacklistedMentions: { targetJid: string }[] = [];
 
           for (const participant of participants) {
             if (!isConnected) return; // Bail mid-loop if disconnected
@@ -486,6 +506,16 @@ export async function startWhatsAppBot(): Promise<any> {
               }
             }
 
+            // Check whether this joiner is blacklisted for spam (sticker/LID or phone form).
+            let isBanned = false;
+            try {
+              isBanned =
+                (await isBlacklisted(id, cleanedParticipant)) ||
+                (!!resolvedPhone && (await isBlacklisted(id, resolvedPhone)));
+            } catch (err) {
+              console.error(`[Bot] Failed to check blacklist status for participant ${cleanedParticipant}:`, err);
+            }
+
             try {
               // Check if they are registered in the database
               const existing = await referralsCollection.findOne({
@@ -496,7 +526,13 @@ export async function startWhatsAppBot(): Promise<any> {
                 deletedAt: { $exists: false }
               } as any);
 
-              if (!existing) {
+              if (isBanned) {
+                // Blacklisted joiners are not treated as "unregistered" — they get a
+                // separate blacklist notice below instead of the normal welcome.
+                blacklistedMentions.push({
+                  targetJid: resolvedPhone || cleanedParticipant,
+                });
+              } else if (!existing) {
                 const targetJid = resolvedPhone || cleanedParticipant;
                 unregisteredMentions.push({ targetJid });
 
@@ -513,7 +549,7 @@ export async function startWhatsAppBot(): Promise<any> {
 
           // Send a short group welcome message after an extra delay
           // to allow WhatsApp cipher key exchange to complete for the new member
-          if (unregisteredMentions.length > 0) {
+          if (unregisteredMentions.length > 0 || blacklistedMentions.length > 0) {
             trackedTimeout(async () => {
               // GUARD: Check connection again before sending
               if (!isConnected) {
@@ -521,10 +557,19 @@ export async function startWhatsAppBot(): Promise<any> {
                 return;
               }
               try {
-                const mentionTags = unregisteredMentions.map(u => `@${u.targetJid.split('@')[0]}`).join(' ');
-                const mentionJids = unregisteredMentions.map(u => u.targetJid);
+                const mentionJids = [
+                  ...unregisteredMentions.map(u => u.targetJid),
+                  ...blacklistedMentions.map(u => u.targetJid),
+                ];
 
-                const groupWelcome = `🎁 *Welcome!* ${mentionTags}\n\nRegister with \`${prefix}reg-ref <companyName>\` to unlock referral access! 💬`;
+                let groupWelcome = `🎁 *Welcome!* ${unregisteredMentions.map(u => `@${u.targetJid.split('@')[0]}`).join(' ')}`;
+                if (unregisteredMentions.length > 0) {
+                  groupWelcome += `\n\nRegister with \`${prefix}reg-ref <companyName>\` to unlock referral access! 💬`;
+                }
+                if (blacklistedMentions.length > 0) {
+                  const blTags = blacklistedMentions.map(u => `@${u.targetJid.split('@')[0]}`).join(' ');
+                  groupWelcome += `\n\n⚠️ ${blTags} ${blacklistedMentions.length === 1 ? 'is' : 'are'} blacklisted for sticker spam. Stop sending stickers or you'll be removed.`;
+                }
 
                 await sendHumanLikeResponse(sock, id, {
                   text: groupWelcome,
